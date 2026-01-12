@@ -19,7 +19,7 @@ pub const DiskManager = struct {
     pub fn readPage(self: *DiskManager, page_id: usize, page: *Page) !void {
         const offset = page_id * PAGE_SIZE;
         try self.file.seekTo(offset);
-        try self.file.readAll(&page.data);
+        _ = try self.file.readAll(&page.data);
     }
 
     pub fn writePage(self: *DiskManager, page_id: usize, page: *const Page) !void {

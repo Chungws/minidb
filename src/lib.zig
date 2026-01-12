@@ -22,3 +22,8 @@ test "basic sanity check" {
     const x: i32 = 42;
     try std.testing.expectEqual(@as(i32, 42), x);
 }
+
+test {
+    _ = @import("storage/mod.zig");
+    _ = @import("sql/mod.zig");
+}
