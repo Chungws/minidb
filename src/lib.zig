@@ -9,7 +9,7 @@ pub const version = "0.1.0";
 
 // Future module exports:
 pub const storage = @import("storage/mod.zig");
-// pub const sql = @import("sql/mod.zig");
+pub const sql = @import("sql/mod.zig");
 // pub const record = @import("record/mod.zig");
 // pub const index = @import("index/mod.zig");
 // pub const query = @import("query/mod.zig");

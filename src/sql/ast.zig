@@ -31,7 +31,12 @@ pub const ColumnDef = struct {
     data_type: DataType,
 };
 
-pub const Condition = union(enum) { simple: SimpleCondition, and_op: struct { left: *Condition, right: *Condition }, or_op: struct { left: *Condition, right: *Condition }, not_op: *Condition };
+pub const Condition = union(enum) {
+    simple: SimpleCondition,
+    and_op: struct { left: *Condition, right: *Condition },
+    or_op: struct { left: *Condition, right: *Condition },
+    not_op: *Condition,
+};
 
 pub const SimpleCondition = struct {
     column: []const u8,
