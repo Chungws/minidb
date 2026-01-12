@@ -29,6 +29,45 @@ pub const Parser = struct {
         };
     }
 
+    pub fn freeStatement(self: *Parser, statement: Statement) void {
+        switch (statement) {
+            .select => {
+                self.allocator.free(statement.select.columns);
+                if (statement.select.where) |where| {
+                    self.freeCondition(where);
+                }
+            },
+            .insert => {
+                self.allocator.free(statement.insert.values);
+            },
+            .create_table => {
+                self.allocator.free(statement.create_table.columns);
+            },
+        }
+    }
+
+    fn freeCondition(self: *Parser, condition: ast.Condition) void {
+        switch (condition) {
+            .or_op => |op| {
+                self.freeCondition(op.left.*);
+                self.freeCondition(op.right.*);
+                self.allocator.destroy(op.left);
+                self.allocator.destroy(op.right);
+            },
+            .and_op => |op| {
+                self.freeCondition(op.left.*);
+                self.freeCondition(op.right.*);
+                self.allocator.destroy(op.left);
+                self.allocator.destroy(op.right);
+            },
+            .not_op => |op| {
+                self.freeCondition(op.*);
+                self.allocator.destroy(op);
+            },
+            else => {},
+        }
+    }
+
     pub fn parse(self: *Parser) !Statement {
         switch (self.current.type) {
             TokenType.select => {
@@ -51,7 +90,7 @@ pub const Parser = struct {
     }
 
     fn parseSelect(self: *Parser) !SelectStatement {
-        self.advance();
+        try self.expect(.select);
 
         var columns = std.ArrayList([]const u8).empty;
         if (self.current.type == TokenType.asterisk) {
@@ -87,12 +126,64 @@ pub const Parser = struct {
     }
 
     fn parseInsert(self: *Parser) !InsertStatement {
-        self.advance();
-        return error.UnexpectedToken;
+        try self.expect(.insert);
+        try self.expect(.into);
+
+        const table_name = self.current.lexeme;
+        try self.expect(.identifier);
+
+        try self.expect(.values);
+        try self.expect(.lparen);
+
+        var columns = std.ArrayList(ast.Value).empty;
+        while (self.current.type != TokenType.rparen) {
+            if (self.current.type == TokenType.comma) {
+                self.advance();
+                continue;
+            }
+            const value = try convertTokenToAstValue(self.current);
+            try columns.append(self.allocator, value);
+            self.advance();
+        }
+        try self.expect(.rparen);
+
+        return InsertStatement{
+            .table_name = table_name,
+            .values = try columns.toOwnedSlice(self.allocator),
+        };
     }
+
     fn parseCreateTable(self: *Parser) !CreateTableStatement {
-        self.advance();
-        return error.UnexpectedToken;
+        try self.expect(.create);
+        try self.expect(.table);
+
+        const table_name = self.current.lexeme;
+        try self.expect(.identifier);
+
+        try self.expect(.lparen);
+
+        var columns = std.ArrayList(ast.ColumnDef).empty;
+        while (self.current.type != TokenType.rparen) {
+            if (self.current.type == TokenType.comma) {
+                self.advance();
+                continue;
+            }
+            const column_name = self.current.lexeme;
+            try self.expect(.identifier);
+
+            const column_type = try convertTokenToAstColumnType(self.current.type);
+            try columns.append(self.allocator, ast.ColumnDef{
+                .data_type = column_type,
+                .name = column_name,
+            });
+            self.advance();
+        }
+        try self.expect(.rparen);
+
+        return CreateTableStatement{
+            .table_name = table_name,
+            .columns = try columns.toOwnedSlice(self.allocator),
+        };
     }
 
     fn parseCondition(self: *Parser) anyerror!ast.Condition {
@@ -175,28 +266,6 @@ pub const Parser = struct {
         }
         self.advance();
     }
-
-    fn freeCondition(self: *Parser, condition: ast.Condition) void {
-        switch (condition) {
-            .or_op => |op| {
-                self.freeCondition(op.left.*);
-                self.freeCondition(op.right.*);
-                self.allocator.destroy(op.left);
-                self.allocator.destroy(op.right);
-            },
-            .and_op => |op| {
-                self.freeCondition(op.left.*);
-                self.freeCondition(op.right.*);
-                self.allocator.destroy(op.left);
-                self.allocator.destroy(op.right);
-            },
-            .not_op => |op| {
-                self.freeCondition(op.*);
-                self.allocator.destroy(op);
-            },
-            else => {},
-        }
-    }
 };
 
 fn checkConditionOperator(t: TokenType) bool {
@@ -245,6 +314,15 @@ fn convertTokenToAstValue(t: Token) !ast.Value {
     }
 }
 
+fn convertTokenToAstColumnType(t: TokenType) !ast.DataType {
+    switch (t) {
+        .int_type => return .INTEGER,
+        .text_type => return .TEXT,
+        .bool_type => return .BOOL,
+        else => return error.UnexpectedToken,
+    }
+}
+
 // ============ Tests ============
 
 test "parse SELECT * FROM table" {
@@ -252,14 +330,13 @@ test "parse SELECT * FROM table" {
     var parser = Parser.init("SELECT * FROM users", allocator);
 
     const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
     const select = stmt.select;
 
     try std.testing.expectEqual(@as(usize, 1), select.columns.len);
     try std.testing.expectEqualStrings("*", select.columns[0]);
     try std.testing.expectEqualStrings("users", select.table_name);
     try std.testing.expect(select.where == null);
-
-    allocator.free(select.columns);
 }
 
 test "parse SELECT columns FROM table" {
@@ -267,14 +344,13 @@ test "parse SELECT columns FROM table" {
     var parser = Parser.init("SELECT name, age FROM users", allocator);
 
     const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
     const select = stmt.select;
 
     try std.testing.expectEqual(@as(usize, 2), select.columns.len);
     try std.testing.expectEqualStrings("name", select.columns[0]);
     try std.testing.expectEqualStrings("age", select.columns[1]);
     try std.testing.expectEqualStrings("users", select.table_name);
-
-    allocator.free(select.columns);
 }
 
 test "parse SELECT with simple WHERE" {
@@ -282,6 +358,7 @@ test "parse SELECT with simple WHERE" {
     var parser = Parser.init("SELECT * FROM users WHERE age >= 18", allocator);
 
     const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
     const select = stmt.select;
 
     try std.testing.expectEqualStrings("users", select.table_name);
@@ -294,8 +371,6 @@ test "parse SELECT with simple WHERE" {
     try std.testing.expectEqualStrings("age", simple.column);
     try std.testing.expectEqual(ast.Operator.gte, simple.op);
     try std.testing.expectEqual(@as(i64, 18), simple.value.integer);
-
-    allocator.free(select.columns);
 }
 
 test "parse SELECT with AND condition" {
@@ -303,15 +378,13 @@ test "parse SELECT with AND condition" {
     var parser = Parser.init("SELECT * FROM users WHERE age >= 18 AND name = 'alice'", allocator);
 
     const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
     const select = stmt.select;
 
     try std.testing.expect(select.where != null);
 
     const where = select.where.?;
     try std.testing.expectEqual(ast.Condition.and_op, std.meta.activeTag(where));
-
-    parser.freeCondition(where);
-    allocator.free(select.columns);
 }
 
 test "parse SELECT with OR condition" {
@@ -319,15 +392,13 @@ test "parse SELECT with OR condition" {
     var parser = Parser.init("SELECT * FROM users WHERE age < 18 OR is_admin = true", allocator);
 
     const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
     const select = stmt.select;
 
     try std.testing.expect(select.where != null);
 
     const where = select.where.?;
     try std.testing.expectEqual(ast.Condition.or_op, std.meta.activeTag(where));
-
-    parser.freeCondition(where);
-    allocator.free(select.columns);
 }
 
 test "parse SELECT with complex condition (AND has higher precedence)" {
@@ -336,6 +407,7 @@ test "parse SELECT with complex condition (AND has higher precedence)" {
     var parser = Parser.init("SELECT * FROM t WHERE a = 1 OR b = 2 AND c = 3", allocator);
 
     const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
     const select = stmt.select;
 
     const where = select.where.?;
@@ -343,9 +415,6 @@ test "parse SELECT with complex condition (AND has higher precedence)" {
     try std.testing.expectEqual(ast.Condition.or_op, std.meta.activeTag(where));
     // Right side of OR should be AND
     try std.testing.expectEqual(ast.Condition.and_op, std.meta.activeTag(where.or_op.right.*));
-
-    parser.freeCondition(where);
-    allocator.free(select.columns);
 }
 
 test "parse SELECT with parentheses in condition" {
@@ -354,6 +423,7 @@ test "parse SELECT with parentheses in condition" {
     var parser = Parser.init("SELECT * FROM t WHERE (a = 1 OR b = 2) AND c = 3", allocator);
 
     const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
     const select = stmt.select;
 
     const where = select.where.?;
@@ -361,9 +431,6 @@ test "parse SELECT with parentheses in condition" {
     try std.testing.expectEqual(ast.Condition.and_op, std.meta.activeTag(where));
     // Left side of AND should be OR
     try std.testing.expectEqual(ast.Condition.or_op, std.meta.activeTag(where.and_op.left.*));
-
-    parser.freeCondition(where);
-    allocator.free(select.columns);
 }
 
 test "parse SELECT with nested parentheses" {
@@ -372,13 +439,12 @@ test "parse SELECT with nested parentheses" {
     var parser = Parser.init("SELECT * FROM t WHERE ((a = 1))", allocator);
 
     const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
     const select = stmt.select;
 
     const where = select.where.?;
     // Should still be simple condition
     try std.testing.expectEqual(ast.Condition.simple, std.meta.activeTag(where));
-
-    allocator.free(select.columns);
 }
 
 test "parse SELECT with NOT condition" {
@@ -386,13 +452,11 @@ test "parse SELECT with NOT condition" {
     var parser = Parser.init("SELECT * FROM t WHERE NOT a = 1", allocator);
 
     const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
     const select = stmt.select;
 
     const where = select.where.?;
     try std.testing.expectEqual(ast.Condition.not_op, std.meta.activeTag(where));
-
-    parser.freeCondition(where);
-    allocator.free(select.columns);
 }
 
 test "parse SELECT with NOT and AND" {
@@ -401,14 +465,12 @@ test "parse SELECT with NOT and AND" {
     var parser = Parser.init("SELECT * FROM t WHERE NOT a = 1 AND b = 2", allocator);
 
     const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
     const select = stmt.select;
 
     const where = select.where.?;
     try std.testing.expectEqual(ast.Condition.and_op, std.meta.activeTag(where));
     try std.testing.expectEqual(ast.Condition.not_op, std.meta.activeTag(where.and_op.left.*));
-
-    parser.freeCondition(where);
-    allocator.free(select.columns);
 }
 
 test "parse SELECT with string comparison" {
@@ -416,6 +478,7 @@ test "parse SELECT with string comparison" {
     var parser = Parser.init("SELECT * FROM users WHERE name = 'alice'", allocator);
 
     const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
     const select = stmt.select;
 
     const where = select.where.?;
@@ -423,8 +486,6 @@ test "parse SELECT with string comparison" {
     try std.testing.expectEqualStrings("name", simple.column);
     try std.testing.expectEqual(ast.Operator.eq, simple.op);
     try std.testing.expectEqualStrings("alice", simple.value.string);
-
-    allocator.free(select.columns);
 }
 
 test "parse SELECT with boolean comparison" {
@@ -432,14 +493,13 @@ test "parse SELECT with boolean comparison" {
     var parser = Parser.init("SELECT * FROM users WHERE active = true", allocator);
 
     const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
     const select = stmt.select;
 
     const where = select.where.?;
     const simple = where.simple;
     try std.testing.expectEqualStrings("active", simple.column);
     try std.testing.expectEqual(true, simple.value.boolean);
-
-    allocator.free(select.columns);
 }
 
 test "parse SELECT with less than operator" {
@@ -447,12 +507,11 @@ test "parse SELECT with less than operator" {
     var parser = Parser.init("SELECT * FROM t WHERE age < 18", allocator);
 
     const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
     const select = stmt.select;
 
     const where = select.where.?;
     try std.testing.expectEqual(ast.Operator.lt, where.simple.op);
-
-    allocator.free(select.columns);
 }
 
 test "parse SELECT with greater than operator" {
@@ -460,12 +519,11 @@ test "parse SELECT with greater than operator" {
     var parser = Parser.init("SELECT * FROM t WHERE age > 18", allocator);
 
     const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
     const select = stmt.select;
 
     const where = select.where.?;
     try std.testing.expectEqual(ast.Operator.gt, where.simple.op);
-
-    allocator.free(select.columns);
 }
 
 test "parse SELECT with not equal operator" {
@@ -473,12 +531,11 @@ test "parse SELECT with not equal operator" {
     var parser = Parser.init("SELECT * FROM t WHERE status != 0", allocator);
 
     const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
     const select = stmt.select;
 
     const where = select.where.?;
     try std.testing.expectEqual(ast.Operator.neq, where.simple.op);
-
-    allocator.free(select.columns);
 }
 
 test "parse SELECT with less than or equal operator" {
@@ -486,12 +543,11 @@ test "parse SELECT with less than or equal operator" {
     var parser = Parser.init("SELECT * FROM t WHERE age <= 18", allocator);
 
     const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
     const select = stmt.select;
 
     const where = select.where.?;
     try std.testing.expectEqual(ast.Operator.lte, where.simple.op);
-
-    allocator.free(select.columns);
 }
 
 test "parse INSERT statement" {
@@ -499,6 +555,7 @@ test "parse INSERT statement" {
     var parser = Parser.init("INSERT INTO users VALUES (1, 'alice', true)", allocator);
 
     const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
     const insert = stmt.insert;
 
     try std.testing.expectEqualStrings("users", insert.table_name);
@@ -506,8 +563,6 @@ test "parse INSERT statement" {
     try std.testing.expectEqual(@as(i64, 1), insert.values[0].integer);
     try std.testing.expectEqualStrings("alice", insert.values[1].string);
     try std.testing.expectEqual(true, insert.values[2].boolean);
-
-    allocator.free(insert.values);
 }
 
 test "parse INSERT with single value" {
@@ -515,13 +570,12 @@ test "parse INSERT with single value" {
     var parser = Parser.init("INSERT INTO t VALUES (42)", allocator);
 
     const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
     const insert = stmt.insert;
 
     try std.testing.expectEqualStrings("t", insert.table_name);
     try std.testing.expectEqual(@as(usize, 1), insert.values.len);
     try std.testing.expectEqual(@as(i64, 42), insert.values[0].integer);
-
-    allocator.free(insert.values);
 }
 
 test "parse INSERT with string value" {
@@ -529,12 +583,11 @@ test "parse INSERT with string value" {
     var parser = Parser.init("INSERT INTO t VALUES ('hello world')", allocator);
 
     const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
     const insert = stmt.insert;
 
     try std.testing.expectEqual(@as(usize, 1), insert.values.len);
     try std.testing.expectEqualStrings("hello world", insert.values[0].string);
-
-    allocator.free(insert.values);
 }
 
 test "parse INSERT with false boolean" {
@@ -542,12 +595,11 @@ test "parse INSERT with false boolean" {
     var parser = Parser.init("INSERT INTO t VALUES (false)", allocator);
 
     const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
     const insert = stmt.insert;
 
     try std.testing.expectEqual(@as(usize, 1), insert.values.len);
     try std.testing.expectEqual(false, insert.values[0].boolean);
-
-    allocator.free(insert.values);
 }
 
 test "parse CREATE TABLE statement" {
@@ -555,6 +607,7 @@ test "parse CREATE TABLE statement" {
     var parser = Parser.init("CREATE TABLE users (id INT, name TEXT, active BOOL)", allocator);
 
     const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
     const create = stmt.create_table;
 
     try std.testing.expectEqualStrings("users", create.table_name);
@@ -568,8 +621,6 @@ test "parse CREATE TABLE statement" {
 
     try std.testing.expectEqualStrings("active", create.columns[2].name);
     try std.testing.expectEqual(ast.DataType.BOOL, create.columns[2].data_type);
-
-    allocator.free(create.columns);
 }
 
 test "parse CREATE TABLE with single column" {
@@ -577,14 +628,13 @@ test "parse CREATE TABLE with single column" {
     var parser = Parser.init("CREATE TABLE t (id INT)", allocator);
 
     const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
     const create = stmt.create_table;
 
     try std.testing.expectEqualStrings("t", create.table_name);
     try std.testing.expectEqual(@as(usize, 1), create.columns.len);
     try std.testing.expectEqualStrings("id", create.columns[0].name);
     try std.testing.expectEqual(ast.DataType.INTEGER, create.columns[0].data_type);
-
-    allocator.free(create.columns);
 }
 
 test "parse CREATE TABLE with all types" {
@@ -592,14 +642,13 @@ test "parse CREATE TABLE with all types" {
     var parser = Parser.init("CREATE TABLE t (a INT, b TEXT, c BOOL)", allocator);
 
     const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
     const create = stmt.create_table;
 
     try std.testing.expectEqual(@as(usize, 3), create.columns.len);
     try std.testing.expectEqual(ast.DataType.INTEGER, create.columns[0].data_type);
     try std.testing.expectEqual(ast.DataType.TEXT, create.columns[1].data_type);
     try std.testing.expectEqual(ast.DataType.BOOL, create.columns[2].data_type);
-
-    allocator.free(create.columns);
 }
 
 test "parse error on invalid statement" {
