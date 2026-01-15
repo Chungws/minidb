@@ -77,7 +77,7 @@ pub const SlottedPage = struct {
 
     pub fn compact(self: *SlottedPage) void {
         var new_end: u16 = PAGE_SIZE;
-        const num_slots = (self.readFreeSpaceStart() - HEADER_SIZE) / SLOT_SIZE;
+        const num_slots = self.numSlotArea();
 
         for (0..num_slots) |i| {
             const slot_offset: u16 = @intCast(HEADER_SIZE + i * SLOT_SIZE);
@@ -101,6 +101,10 @@ pub const SlottedPage = struct {
 
     pub fn freeSpace(self: *const SlottedPage) u16 {
         return self.readFreeSpaceEnd() - self.readFreeSpaceStart();
+    }
+
+    pub fn numSlotArea(self: *const SlottedPage) u16 {
+        return (self.readFreeSpaceStart() - HEADER_SIZE) / SLOT_SIZE;
     }
 
     fn findFreeSlot(self: *const SlottedPage) u16 {
