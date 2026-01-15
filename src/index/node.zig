@@ -62,6 +62,26 @@ pub const InternalNode = struct {
             .children = children,
         };
     }
+
+    pub fn deinit(self: *InternalNode, allocator: Allocator) void {
+        allocator.free(self.keys);
+        allocator.free(self.children);
+    }
+
+    pub fn findChildPageId(self: *const InternalNode, key: i64) u16 {
+        if (key < self.keys[0]) {
+            return self.children[0];
+        } else if (key >= self.keys[self.keys.len - 1]) {
+            return self.children[self.children.len - 1];
+        }
+
+        for (1..self.keys.len) |i| {
+            if (self.keys[i - 1] <= key and key < self.keys[i]) {
+                return self.children[i];
+            }
+        }
+        unreachable;
+    }
 };
 
 pub const LeafNode = struct {
@@ -131,6 +151,11 @@ pub const LeafNode = struct {
             .rids = rids,
             .next = if (next != 0) next else null,
         };
+    }
+
+    pub fn deinit(self: *LeafNode, allocator: Allocator) void {
+        allocator.free(self.keys);
+        allocator.free(self.rids);
     }
 };
 
