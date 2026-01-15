@@ -1,0 +1,109 @@
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+
+const tuple = @import("tuple.zig");
+const Tuple = tuple.Tuple;
+const Schema = tuple.Schema;
+const heap = @import("heap.zig");
+const HeapFile = heap.HeapFile;
+const HeapIterator = heap.HeapIterator;
+const RID = heap.RID;
+
+pub const Table = struct {
+    name: []const u8,
+    schema: Schema,
+    heap_file: HeapFile,
+
+    pub fn init(name: []const u8, schema: Schema, allocator: Allocator) !Table {
+        const heap_file = try HeapFile.init(allocator);
+        return .{
+            .name = name,
+            .schema = schema,
+            .heap_file = heap_file,
+        };
+    }
+
+    pub fn deinit(self: *Table) void {
+        self.heap_file.deinit();
+    }
+
+    pub fn insert(self: *Table, t: *const Tuple) !RID {
+        return try self.heap_file.insert(t);
+    }
+
+    pub fn get(self: *const Table, rid: RID, allocator: Allocator) !?Tuple {
+        const record = self.heap_file.get(rid);
+        if (record) |r| {
+            return try Tuple.deserialize(r, self.schema, allocator);
+        }
+        return null;
+    }
+
+    pub fn delete(self: *Table, rid: RID) void {
+        self.heap_file.delete(rid);
+    }
+
+    pub fn scan(self: *const Table) HeapIterator {
+        return self.heap_file.scan();
+    }
+};
+
+// ============ Tests ============
+
+test "table init and deinit" {
+    const allocator = std.testing.allocator;
+    const schema = Schema{
+        .columns = &[_]tuple.ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+        },
+    };
+    var table = try Table.init("test_table", schema, allocator);
+    defer table.deinit();
+
+    try std.testing.expectEqualStrings("test_table", table.name);
+}
+
+test "table insert and get" {
+    const allocator = std.testing.allocator;
+    const schema = Schema{
+        .columns = &[_]tuple.ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+            .{ .name = "name", .data_type = .text, .nullable = false },
+        },
+    };
+    var table = try Table.init("users", schema, allocator);
+    defer table.deinit();
+
+    const t = Tuple{
+        .values = &[_]tuple.Value{
+            .{ .integer = 42 },
+            .{ .text = "alice" },
+        },
+    };
+
+    const rid = try table.insert(&t);
+    var result = try table.get(rid, allocator);
+    defer result.?.deinit(allocator);
+
+    try std.testing.expectEqual(@as(i64, 42), result.?.values[0].integer);
+    try std.testing.expectEqualStrings("alice", result.?.values[1].text);
+}
+
+test "table delete" {
+    const allocator = std.testing.allocator;
+    const schema = Schema{
+        .columns = &[_]tuple.ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+        },
+    };
+    var table = try Table.init("test", schema, allocator);
+    defer table.deinit();
+
+    const t = Tuple{ .values = &[_]tuple.Value{.{ .integer = 1 }} };
+    const rid = try table.insert(&t);
+
+    table.delete(rid);
+
+    const result = try table.get(rid, allocator);
+    try std.testing.expect(result == null);
+}
