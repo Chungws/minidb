@@ -10,6 +10,7 @@ const InternalNode = node.InternalNode;
 const LeafNode = node.LeafNode;
 
 const MAX_KEYS: comptime_int = 4;
+const TOMBSTONE_RID = RID{ .page_id = 0xFFFF, .slot_id = 0xFFFF };
 
 const SplitResult = struct {
     mid_key: i64,
@@ -45,7 +46,9 @@ pub const BTree = struct {
         defer leaf.deinit(self.allocator);
 
         for (leaf.keys, 0..) |k, i| {
-            if (k == key) return leaf.rids[i];
+            if (k == key) {
+                return if (std.meta.eql(leaf.rids[i], TOMBSTONE_RID)) null else leaf.rids[i];
+            }
         }
         return null;
     }
@@ -64,7 +67,7 @@ pub const BTree = struct {
 
             for (leaf.keys, 0..) |k, i| {
                 if (k > end_key) return results;
-                if (k >= start_key) {
+                if (k >= start_key and !std.meta.eql(leaf.rids[i], TOMBSTONE_RID)) {
                     try results.append(self.allocator, leaf.rids[i]);
                 }
             }
@@ -73,6 +76,24 @@ pub const BTree = struct {
         }
 
         return results;
+    }
+
+    pub fn delete(self: *BTree, key: i64) !bool {
+        const page_id = try self.findLeaf(key, null);
+        var leaf = try LeafNode.deserialize(&self.pages.items[page_id], self.allocator);
+        defer leaf.deinit(self.allocator);
+
+        var result = false;
+        for (leaf.keys, 0..) |k, i| {
+            if (k == key) {
+                leaf.rids[i] = TOMBSTONE_RID;
+                result = true;
+                break;
+            }
+        }
+
+        leaf.serialize(&self.pages.items[page_id]);
+        return result;
     }
 
     pub fn insert(self: *BTree, key: i64, rid: RID) !void {
@@ -476,4 +497,55 @@ test "btree range scan across multiple leaves" {
     var results = try btree.rangeScan(20, 50);
     defer results.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 4), results.items.len);
+}
+
+test "btree delete marks key as tombstone" {
+    const allocator = std.testing.allocator;
+    var btree = BTree.init(allocator);
+    defer btree.deinit();
+
+    try btree.insert(10, RID{ .page_id = 10, .slot_id = 10 });
+    try btree.insert(20, RID{ .page_id = 20, .slot_id = 20 });
+    try btree.insert(30, RID{ .page_id = 30, .slot_id = 30 });
+
+    // Delete key 20
+    const deleted = try btree.delete(20);
+    try std.testing.expect(deleted);
+
+    // Search should return null for deleted key
+    const result = try btree.search(20);
+    try std.testing.expect(result == null);
+
+    // Other keys should still be searchable
+    const r1 = try btree.search(10);
+    try std.testing.expect(r1 != null);
+    const r3 = try btree.search(30);
+    try std.testing.expect(r3 != null);
+}
+
+test "btree delete non-existent key returns false" {
+    const allocator = std.testing.allocator;
+    var btree = BTree.init(allocator);
+    defer btree.deinit();
+
+    try btree.insert(10, RID{ .page_id = 10, .slot_id = 10 });
+
+    const deleted = try btree.delete(999);
+    try std.testing.expect(!deleted);
+}
+
+test "btree range scan excludes deleted keys" {
+    const allocator = std.testing.allocator;
+    var btree = BTree.init(allocator);
+    defer btree.deinit();
+
+    try btree.insert(10, RID{ .page_id = 10, .slot_id = 10 });
+    try btree.insert(20, RID{ .page_id = 20, .slot_id = 20 });
+    try btree.insert(30, RID{ .page_id = 30, .slot_id = 30 });
+
+    _ = try btree.delete(20);
+
+    var results = try btree.rangeScan(10, 30);
+    defer results.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 2), results.items.len);
 }
