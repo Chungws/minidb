@@ -138,8 +138,11 @@ pub const BTree = struct {
         defer leaf.deinit(self.allocator);
 
         var keys = std.ArrayList(i64).empty;
-        try keys.appendSlice(self.allocator, leaf.keys);
+        defer keys.deinit(self.allocator);
         var rids = std.ArrayList(RID).empty;
+        defer rids.deinit(self.allocator);
+
+        try keys.appendSlice(self.allocator, leaf.keys);
         try rids.appendSlice(self.allocator, leaf.rids);
 
         const pos = findInsertPos(keys.items, key);
@@ -147,12 +150,10 @@ pub const BTree = struct {
         try rids.insert(self.allocator, pos, rid);
 
         var new_leaf = LeafNode{
-            .keys = try keys.toOwnedSlice(self.allocator),
-            .rids = try rids.toOwnedSlice(self.allocator),
+            .keys = keys.items[0..],
+            .rids = rids.items[0..],
             .next = leaf.next,
         };
-        defer new_leaf.deinit(self.allocator);
-
         new_leaf.serialize(&self.pages.items[page_id]);
     }
 
@@ -162,8 +163,11 @@ pub const BTree = struct {
         defer internal.deinit(self.allocator);
 
         var keys = std.ArrayList(i64).empty;
-        try keys.appendSlice(self.allocator, internal.keys);
+        defer keys.deinit(self.allocator);
         var children = std.ArrayList(u16).empty;
+        defer children.deinit(self.allocator);
+
+        try keys.appendSlice(self.allocator, internal.keys);
         try children.appendSlice(self.allocator, internal.children);
 
         const pos = findInsertPos(keys.items, key);
@@ -171,11 +175,9 @@ pub const BTree = struct {
         try children.insert(self.allocator, pos + 1, new_page_id);
 
         var new_internal = InternalNode{
-            .keys = try keys.toOwnedSlice(self.allocator),
-            .children = try children.toOwnedSlice(self.allocator),
+            .keys = keys.items[0..],
+            .children = children.items[0..],
         };
-        defer new_internal.deinit(self.allocator);
-
         new_internal.serialize(&self.pages.items[page_id]);
     }
 
@@ -197,26 +199,17 @@ pub const BTree = struct {
 
         const mid = keys.items.len / 2;
 
-        const left_keys = try self.allocator.dupe(i64, keys.items[0..mid]);
-        defer self.allocator.free(left_keys);
-        const right_keys = try self.allocator.dupe(i64, keys.items[mid..]);
-        defer self.allocator.free(right_keys);
-        const left_rids = try self.allocator.dupe(RID, rids.items[0..mid]);
-        defer self.allocator.free(left_rids);
-        const right_rids = try self.allocator.dupe(RID, rids.items[mid..]);
-        defer self.allocator.free(right_rids);
-
         var right_leaf = Node{ .leaf = LeafNode{
-            .keys = right_keys,
-            .rids = right_rids,
+            .keys = keys.items[mid..],
+            .rids = rids.items[mid..],
             .next = leaf.next,
         } };
         const new_page_id = try self.createNewNode(&right_leaf);
 
         var left_leaf = LeafNode{
-            .keys = left_keys,
-            .rids = left_rids,
-            .next = @intCast(self.pages.items.len - 1),
+            .keys = keys.items[0..mid],
+            .rids = rids.items[0..mid],
+            .next = new_page_id,
         };
         left_leaf.serialize(&self.pages.items[page_id]);
 
@@ -244,24 +237,18 @@ pub const BTree = struct {
 
         const mid = keys.items.len / 2;
 
-        const left_keys = try self.allocator.dupe(i64, keys.items[0..mid]);
-        defer self.allocator.free(left_keys);
-        const right_keys = try self.allocator.dupe(i64, keys.items[mid + 1 ..]);
-        defer self.allocator.free(right_keys);
-        const left_children = try self.allocator.dupe(u16, children.items[0 .. mid + 1]);
-        defer self.allocator.free(left_children);
-        const right_children = try self.allocator.dupe(u16, children.items[mid + 1 ..]);
-        defer self.allocator.free(right_children);
-
         var new_node = Node{
             .internal = InternalNode{
-                .keys = right_keys,
-                .children = right_children,
+                .keys = keys.items[mid + 1 ..],
+                .children = children.items[mid + 1 ..],
             },
         };
         const new_page_id = try self.createNewNode(&new_node);
 
-        var left_internal = InternalNode{ .keys = left_keys, .children = left_children };
+        var left_internal = InternalNode{
+            .keys = keys.items[0..mid],
+            .children = children.items[0 .. mid + 1],
+        };
         left_internal.serialize(&self.pages.items[page_id]);
 
         return .{
