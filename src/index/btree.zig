@@ -50,6 +50,31 @@ pub const BTree = struct {
         return null;
     }
 
+    pub fn rangeScan(self: *const BTree, start_key: i64, end_key: i64) !std.ArrayList(RID) {
+        var results = std.ArrayList(RID).empty;
+
+        if (self.root_page_id == null) {
+            return results;
+        }
+
+        var page_id: ?u16 = try self.findLeaf(start_key, null);
+        while (page_id) |pid| {
+            var leaf = try LeafNode.deserialize(&self.pages.items[pid], self.allocator);
+            defer leaf.deinit(self.allocator);
+
+            for (leaf.keys, 0..) |k, i| {
+                if (k > end_key) return results;
+                if (k >= start_key) {
+                    try results.append(self.allocator, leaf.rids[i]);
+                }
+            }
+
+            page_id = leaf.next;
+        }
+
+        return results;
+    }
+
     pub fn insert(self: *BTree, key: i64, rid: RID) !void {
         if (self.root_page_id == null) {
             var keys = [_]i64{key};
@@ -395,4 +420,60 @@ test "btree insert triggers second leaf split" {
 
     const r3 = try btree.search(80);
     try std.testing.expect(r3 != null);
+}
+
+test "btree range scan empty tree" {
+    const allocator = std.testing.allocator;
+    var btree = BTree.init(allocator);
+    defer btree.deinit();
+
+    var results = try btree.rangeScan(10, 50);
+    defer results.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), results.items.len);
+}
+
+test "btree range scan single leaf" {
+    const allocator = std.testing.allocator;
+    var btree = BTree.init(allocator);
+    defer btree.deinit();
+
+    try btree.insert(10, RID{ .page_id = 10, .slot_id = 10 });
+    try btree.insert(20, RID{ .page_id = 20, .slot_id = 20 });
+    try btree.insert(30, RID{ .page_id = 30, .slot_id = 30 });
+
+    // Full range
+    var results1 = try btree.rangeScan(10, 30);
+    defer results1.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 3), results1.items.len);
+
+    // Partial range
+    var results2 = try btree.rangeScan(15, 25);
+    defer results2.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), results2.items.len);
+    try std.testing.expectEqual(@as(u16, 20), results2.items[0].page_id);
+
+    // Empty range
+    var results3 = try btree.rangeScan(100, 200);
+    defer results3.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), results3.items.len);
+}
+
+test "btree range scan across multiple leaves" {
+    const allocator = std.testing.allocator;
+    var btree = BTree.init(allocator);
+    defer btree.deinit();
+
+    // Insert enough to trigger splits
+    try btree.insert(10, RID{ .page_id = 10, .slot_id = 10 });
+    try btree.insert(20, RID{ .page_id = 20, .slot_id = 20 });
+    try btree.insert(30, RID{ .page_id = 30, .slot_id = 30 });
+    try btree.insert(40, RID{ .page_id = 40, .slot_id = 40 });
+    try btree.insert(50, RID{ .page_id = 50, .slot_id = 50 });
+    try btree.insert(60, RID{ .page_id = 60, .slot_id = 60 });
+
+    // Range spanning multiple leaves
+    var results = try btree.rangeScan(20, 50);
+    defer results.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 4), results.items.len);
 }
