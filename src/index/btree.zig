@@ -9,6 +9,13 @@ const Node = node.Node;
 const InternalNode = node.InternalNode;
 const LeafNode = node.LeafNode;
 
+const MAX_KEYS: comptime_int = 4;
+
+const SplitResult = struct {
+    mid_key: i64,
+    new_page_id: u16,
+};
+
 pub const BTree = struct {
     pages: std.ArrayList(Page),
     root_page_id: ?u16,
@@ -31,7 +38,7 @@ pub const BTree = struct {
             return null;
         }
 
-        const leaf_page_id = try self.findLeaf(key);
+        const leaf_page_id = try self.findLeaf(key, null);
 
         const page = &self.pages.items[leaf_page_id];
         var leaf = try LeafNode.deserialize(page, self.allocator);
@@ -43,13 +50,74 @@ pub const BTree = struct {
         return null;
     }
 
-    fn findLeaf(self: *const BTree, key: i64) !u16 {
+    pub fn insert(self: *BTree, key: i64, rid: RID) !void {
+        if (self.root_page_id == null) {
+            var keys = [_]i64{key};
+            var rids = [_]RID{rid};
+            var leaf = Node{ .leaf = LeafNode{
+                .keys = &keys,
+                .rids = &rids,
+                .next = null,
+            } };
+            const new_page_id = try self.createNewNode(&leaf);
+            self.root_page_id = new_page_id;
+            return;
+        }
+
+        var path = std.ArrayList(u16).empty;
+        defer path.deinit(self.allocator);
+
+        const leaf_page_id = try self.findLeaf(key, &path);
+        var leaf = try LeafNode.deserialize(&self.pages.items[leaf_page_id], self.allocator);
+        defer leaf.deinit(self.allocator);
+
+        var split_info: ?struct { left: u16, mid_key: i64, right: u16 } = null;
+        if (leaf.keys.len < MAX_KEYS) {
+            try self.insertInLeaf(leaf_page_id, key, rid);
+        } else {
+            const result = try self.splitLeaf(leaf_page_id, key, rid);
+            split_info = .{
+                .left = leaf_page_id,
+                .mid_key = result.mid_key,
+                .right = result.new_page_id,
+            };
+        }
+
+        while (split_info) |info| {
+            _ = path.pop();
+
+            if (path.items.len == 0) {
+                try self.createNewRoot(info.left, info.mid_key, info.right);
+                break;
+            }
+
+            const parent_id = path.getLast();
+            var parent = try InternalNode.deserialize(&self.pages.items[parent_id], self.allocator);
+            if (parent.keys.len < MAX_KEYS) {
+                try self.insertInInternal(parent_id, info.mid_key, info.right);
+                split_info = null;
+            } else {
+                const result = try self.splitInternal(parent_id, info.mid_key, info.right);
+                split_info = .{
+                    .left = parent_id,
+                    .mid_key = result.mid_key,
+                    .right = result.new_page_id,
+                };
+            }
+            parent.deinit(self.allocator);
+        }
+    }
+
+    fn findLeaf(self: *const BTree, key: i64, path: ?*std.ArrayList(u16)) !u16 {
         var page_id = self.root_page_id.?;
         var n: Node = undefined;
 
         while (true) {
             const page = &self.pages.items[page_id];
             n = try Node.deserialize(page, self.allocator);
+            if (path) |p| {
+                try p.append(self.allocator, page_id);
+            }
 
             switch (n) {
                 .leaf => |*ln| {
@@ -63,8 +131,169 @@ pub const BTree = struct {
             }
         }
     }
+
+    fn insertInLeaf(self: *BTree, page_id: u16, key: i64, rid: RID) !void {
+        const page = &self.pages.items[page_id];
+        var leaf = try LeafNode.deserialize(page, self.allocator);
+        defer leaf.deinit(self.allocator);
+
+        var keys = std.ArrayList(i64).empty;
+        try keys.appendSlice(self.allocator, leaf.keys);
+        var rids = std.ArrayList(RID).empty;
+        try rids.appendSlice(self.allocator, leaf.rids);
+
+        const pos = findInsertPos(keys.items, key);
+        try keys.insert(self.allocator, pos, key);
+        try rids.insert(self.allocator, pos, rid);
+
+        var new_leaf = LeafNode{
+            .keys = try keys.toOwnedSlice(self.allocator),
+            .rids = try rids.toOwnedSlice(self.allocator),
+            .next = leaf.next,
+        };
+        defer new_leaf.deinit(self.allocator);
+
+        new_leaf.serialize(&self.pages.items[page_id]);
+    }
+
+    fn insertInInternal(self: *BTree, page_id: u16, key: i64, new_page_id: u16) !void {
+        const page = &self.pages.items[page_id];
+        var internal = try InternalNode.deserialize(page, self.allocator);
+        defer internal.deinit(self.allocator);
+
+        var keys = std.ArrayList(i64).empty;
+        try keys.appendSlice(self.allocator, internal.keys);
+        var children = std.ArrayList(u16).empty;
+        try children.appendSlice(self.allocator, internal.children);
+
+        const pos = findInsertPos(keys.items, key);
+        try keys.insert(self.allocator, pos, key);
+        try children.insert(self.allocator, pos + 1, new_page_id);
+
+        var new_internal = InternalNode{
+            .keys = try keys.toOwnedSlice(self.allocator),
+            .children = try children.toOwnedSlice(self.allocator),
+        };
+        defer new_internal.deinit(self.allocator);
+
+        new_internal.serialize(&self.pages.items[page_id]);
+    }
+
+    fn splitLeaf(self: *BTree, page_id: u16, key: i64, rid: RID) !SplitResult {
+        var leaf = try LeafNode.deserialize(&self.pages.items[page_id], self.allocator);
+        defer leaf.deinit(self.allocator);
+
+        var keys = std.ArrayList(i64).empty;
+        defer keys.deinit(self.allocator);
+        var rids = std.ArrayList(RID).empty;
+        defer rids.deinit(self.allocator);
+
+        try keys.appendSlice(self.allocator, leaf.keys);
+        try rids.appendSlice(self.allocator, leaf.rids);
+
+        const pos = findInsertPos(keys.items, key);
+        try keys.insert(self.allocator, pos, key);
+        try rids.insert(self.allocator, pos, rid);
+
+        const mid = keys.items.len / 2;
+
+        const left_keys = try self.allocator.dupe(i64, keys.items[0..mid]);
+        defer self.allocator.free(left_keys);
+        const right_keys = try self.allocator.dupe(i64, keys.items[mid..]);
+        defer self.allocator.free(right_keys);
+        const left_rids = try self.allocator.dupe(RID, rids.items[0..mid]);
+        defer self.allocator.free(left_rids);
+        const right_rids = try self.allocator.dupe(RID, rids.items[mid..]);
+        defer self.allocator.free(right_rids);
+
+        var right_leaf = Node{ .leaf = LeafNode{
+            .keys = right_keys,
+            .rids = right_rids,
+            .next = leaf.next,
+        } };
+        const new_page_id = try self.createNewNode(&right_leaf);
+
+        var left_leaf = LeafNode{
+            .keys = left_keys,
+            .rids = left_rids,
+            .next = @intCast(self.pages.items.len - 1),
+        };
+        left_leaf.serialize(&self.pages.items[page_id]);
+
+        return .{
+            .mid_key = keys.items[mid],
+            .new_page_id = new_page_id,
+        };
+    }
+
+    fn splitInternal(self: *BTree, page_id: u16, key: i64, child_page_id: u16) !SplitResult {
+        var internal = try InternalNode.deserialize(&self.pages.items[page_id], self.allocator);
+        defer internal.deinit(self.allocator);
+
+        var keys = std.ArrayList(i64).empty;
+        defer keys.deinit(self.allocator);
+        var children = std.ArrayList(u16).empty;
+        defer children.deinit(self.allocator);
+
+        try keys.appendSlice(self.allocator, internal.keys);
+        try children.appendSlice(self.allocator, internal.children);
+
+        const pos = findInsertPos(keys.items, key);
+        try keys.insert(self.allocator, pos, key);
+        try children.insert(self.allocator, pos + 1, child_page_id);
+
+        const mid = keys.items.len / 2;
+
+        const left_keys = try self.allocator.dupe(i64, keys.items[0..mid]);
+        defer self.allocator.free(left_keys);
+        const right_keys = try self.allocator.dupe(i64, keys.items[mid + 1 ..]);
+        defer self.allocator.free(right_keys);
+        const left_children = try self.allocator.dupe(u16, children.items[0 .. mid + 1]);
+        defer self.allocator.free(left_children);
+        const right_children = try self.allocator.dupe(u16, children.items[mid + 1 ..]);
+        defer self.allocator.free(right_children);
+
+        var new_node = Node{
+            .internal = InternalNode{
+                .keys = right_keys,
+                .children = right_children,
+            },
+        };
+        const new_page_id = try self.createNewNode(&new_node);
+
+        var left_internal = InternalNode{ .keys = left_keys, .children = left_children };
+        left_internal.serialize(&self.pages.items[page_id]);
+
+        return .{
+            .mid_key = keys.items[mid],
+            .new_page_id = new_page_id,
+        };
+    }
+
+    fn createNewRoot(self: *BTree, left_page_id: u16, mid_key: i64, right_page_id: u16) !void {
+        var keys = [_]i64{mid_key};
+        var children = [_]u16{ left_page_id, right_page_id };
+        var new_internal_node = Node{ .internal = InternalNode{
+            .keys = &keys,
+            .children = &children,
+        } };
+        const new_page_id = try self.createNewNode(&new_internal_node);
+        self.root_page_id = new_page_id;
+    }
+
+    fn createNewNode(self: *BTree, n: *Node) !u16 {
+        var new_page = Page.init();
+        n.serialize(&new_page);
+        try self.pages.append(self.allocator, new_page);
+        return @intCast(self.pages.items.len - 1);
+    }
 };
 
+fn findInsertPos(keys: []const i64, key: i64) usize {
+    var pos: usize = 0;
+    while (pos < keys.len and keys[pos] < key) : (pos += 1) {}
+    return pos;
+}
 // ============ Tests ============
 
 test "btree init and deinit" {
@@ -116,4 +345,105 @@ test "btree search in single leaf node" {
     // Search for non-existing key
     const result2 = try btree.search(15);
     try std.testing.expect(result2 == null);
+}
+
+test "btree insert into empty tree" {
+    const allocator = std.testing.allocator;
+    var btree = BTree.init(allocator);
+    defer btree.deinit();
+
+    try btree.insert(42, RID{ .page_id = 1, .slot_id = 1 });
+
+    try std.testing.expectEqual(@as(?u16, 0), btree.root_page_id);
+
+    const result = try btree.search(42);
+    try std.testing.expect(result != null);
+    try std.testing.expectEqual(@as(u16, 1), result.?.page_id);
+    try std.testing.expectEqual(@as(u16, 1), result.?.slot_id);
+}
+
+test "btree insert multiple keys maintains sorted order" {
+    const allocator = std.testing.allocator;
+    var btree = BTree.init(allocator);
+    defer btree.deinit();
+
+    // Insert keys out of order
+    try btree.insert(30, RID{ .page_id = 3, .slot_id = 3 });
+    try btree.insert(10, RID{ .page_id = 1, .slot_id = 1 });
+    try btree.insert(20, RID{ .page_id = 2, .slot_id = 2 });
+    try btree.insert(15, RID{ .page_id = 15, .slot_id = 15 });
+
+    // Verify all keys are searchable
+    const r1 = try btree.search(10);
+    try std.testing.expect(r1 != null);
+    try std.testing.expectEqual(@as(u16, 1), r1.?.page_id);
+
+    const r2 = try btree.search(15);
+    try std.testing.expect(r2 != null);
+    try std.testing.expectEqual(@as(u16, 15), r2.?.page_id);
+
+    const r3 = try btree.search(20);
+    try std.testing.expect(r3 != null);
+    try std.testing.expectEqual(@as(u16, 2), r3.?.page_id);
+
+    const r4 = try btree.search(30);
+    try std.testing.expect(r4 != null);
+    try std.testing.expectEqual(@as(u16, 3), r4.?.page_id);
+}
+
+test "btree insert triggers leaf split" {
+    const allocator = std.testing.allocator;
+    var btree = BTree.init(allocator);
+    defer btree.deinit();
+
+    // Insert MAX_KEYS + 1 = 5 keys to trigger split
+    try btree.insert(10, RID{ .page_id = 1, .slot_id = 1 });
+    try btree.insert(20, RID{ .page_id = 2, .slot_id = 2 });
+    try btree.insert(30, RID{ .page_id = 3, .slot_id = 3 });
+    try btree.insert(40, RID{ .page_id = 4, .slot_id = 4 });
+    try btree.insert(25, RID{ .page_id = 25, .slot_id = 25 }); // triggers split
+
+    // Should have 3 pages now (left leaf + right leaf + internal root)
+    try std.testing.expectEqual(@as(usize, 3), btree.pages.items.len);
+
+    // All keys should still be searchable
+    const r1 = try btree.search(10);
+    try std.testing.expect(r1 != null);
+    try std.testing.expectEqual(@as(u16, 1), r1.?.page_id);
+
+    const r2 = try btree.search(25);
+    try std.testing.expect(r2 != null);
+    try std.testing.expectEqual(@as(u16, 25), r2.?.page_id);
+
+    const r3 = try btree.search(40);
+    try std.testing.expect(r3 != null);
+    try std.testing.expectEqual(@as(u16, 4), r3.?.page_id);
+}
+
+test "btree insert triggers second leaf split" {
+    const allocator = std.testing.allocator;
+    var btree = BTree.init(allocator);
+    defer btree.deinit();
+
+    // First split: 5 keys
+    try btree.insert(10, RID{ .page_id = 10, .slot_id = 10 });
+    try btree.insert(20, RID{ .page_id = 20, .slot_id = 20 });
+    try btree.insert(30, RID{ .page_id = 30, .slot_id = 30 });
+    try btree.insert(40, RID{ .page_id = 40, .slot_id = 40 });
+    try btree.insert(50, RID{ .page_id = 50, .slot_id = 50 }); // first split
+
+    // Add more to right leaf to trigger second split
+    try btree.insert(60, RID{ .page_id = 60, .slot_id = 60 });
+    try btree.insert(70, RID{ .page_id = 70, .slot_id = 70 });
+    try btree.insert(80, RID{ .page_id = 80, .slot_id = 80 }); // second split
+
+    // All keys should be searchable
+    const r1 = try btree.search(10);
+    try std.testing.expect(r1 != null);
+
+    const r2 = try btree.search(50);
+    try std.testing.expect(r2 != null);
+
+    const r3 = try btree.search(80);
+    try std.testing.expect(r3 != null);
 }
