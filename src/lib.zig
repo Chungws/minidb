@@ -12,7 +12,7 @@ pub const storage = @import("storage/mod.zig");
 pub const sql = @import("sql/mod.zig");
 pub const record = @import("record/mod.zig");
 pub const index = @import("index/mod.zig");
-// pub const query = @import("query/mod.zig");
+pub const query = @import("query/mod.zig");
 
 test "version is defined" {
     try std.testing.expectEqualStrings("0.1.0", version);
@@ -28,4 +28,5 @@ test {
     _ = @import("sql/mod.zig");
     _ = @import("record/mod.zig");
     _ = @import("index/mod.zig");
+    _ = @import("query/mod.zig");
 }

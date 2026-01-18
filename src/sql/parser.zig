@@ -307,7 +307,7 @@ fn convertTokenToAstOperator(t: TokenType) !ast.Operator {
 fn convertTokenToAstValue(t: Token) !ast.Value {
     switch (t.type) {
         TokenType.integer => return ast.Value{ .integer = try std.fmt.parseInt(i64, t.lexeme, 10) },
-        TokenType.string => return ast.Value{ .string = t.lexeme },
+        TokenType.string => return ast.Value{ .text = t.lexeme },
         TokenType.true_lit => return ast.Value{ .boolean = true },
         TokenType.false_lit => return ast.Value{ .boolean = false },
         else => return error.UnexpectedToken,
@@ -485,7 +485,7 @@ test "parse SELECT with string comparison" {
     const simple = where.simple;
     try std.testing.expectEqualStrings("name", simple.column);
     try std.testing.expectEqual(ast.Operator.eq, simple.op);
-    try std.testing.expectEqualStrings("alice", simple.value.string);
+    try std.testing.expectEqualStrings("alice", simple.value.text);
 }
 
 test "parse SELECT with boolean comparison" {
@@ -561,7 +561,7 @@ test "parse INSERT statement" {
     try std.testing.expectEqualStrings("users", insert.table_name);
     try std.testing.expectEqual(@as(usize, 3), insert.values.len);
     try std.testing.expectEqual(@as(i64, 1), insert.values[0].integer);
-    try std.testing.expectEqualStrings("alice", insert.values[1].string);
+    try std.testing.expectEqualStrings("alice", insert.values[1].text);
     try std.testing.expectEqual(true, insert.values[2].boolean);
 }
 
@@ -587,7 +587,7 @@ test "parse INSERT with string value" {
     const insert = stmt.insert;
 
     try std.testing.expectEqual(@as(usize, 1), insert.values.len);
-    try std.testing.expectEqualStrings("hello world", insert.values[0].string);
+    try std.testing.expectEqualStrings("hello world", insert.values[0].text);
 }
 
 test "parse INSERT with false boolean" {

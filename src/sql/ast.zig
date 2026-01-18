@@ -1,3 +1,5 @@
+const std = @import("std");
+
 pub const DataType = enum {
     INTEGER,
     TEXT,
@@ -55,6 +57,56 @@ pub const Operator = enum {
 
 pub const Value = union(enum) {
     integer: i64,
-    string: []const u8,
+    text: []const u8,
     boolean: bool,
+    null_value: void,
+
+    pub fn compareValue(self: *const Value, rhs: Value, op: Operator) bool {
+        return switch (self.*) {
+            .integer => |v| switch (rhs) {
+                .integer => |rhsv| compareInt(v, rhsv, op),
+                else => false,
+            },
+            .text => |v| switch (rhs) {
+                .text => |rhsv| compareStr(v, rhsv, op),
+                else => false,
+            },
+            .boolean => |v| switch (rhs) {
+                .boolean => |rhsv| compareBool(v, rhsv, op),
+                else => false,
+            },
+            .null_value => false,
+        };
+    }
+
+    fn compareInt(a: i64, b: i64, op: Operator) bool {
+        return switch (op) {
+            .eq => a == b,
+            .neq => a != b,
+            .lt => a < b,
+            .gt => a > b,
+            .lte => a <= b,
+            .gte => a >= b,
+        };
+    }
+
+    fn compareStr(a: []const u8, b: []const u8, op: Operator) bool {
+        const order = std.mem.order(u8, a, b);
+        return switch (op) {
+            .eq => order == .eq,
+            .neq => order != .eq,
+            .lt => order == .lt,
+            .gt => order == .gt,
+            .lte => order == .lt or order == .eq,
+            .gte => order == .gt or order == .eq,
+        };
+    }
+
+    fn compareBool(a: bool, b: bool, op: Operator) bool {
+        return switch (op) {
+            .eq => a == b,
+            .neq => a != b,
+            else => false,
+        };
+    }
 };

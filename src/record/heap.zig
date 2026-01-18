@@ -1,6 +1,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const ast = @import("../sql/ast.zig");
+const Value = ast.Value;
 const slot = @import("slot.zig");
 const SlottedPage = slot.SlottedPage;
 const Page = @import("../storage/page.zig").Page;
@@ -119,7 +121,7 @@ test "heap file insert and get" {
     defer heap.deinit();
 
     const t = Tuple{
-        .values = &[_]tuple.Value{
+        .values = &[_]Value{
             .{ .integer = 42 },
             .{ .text = "hello" },
         },
@@ -137,7 +139,7 @@ test "heap file delete" {
     defer heap.deinit();
 
     const t = Tuple{
-        .values = &[_]tuple.Value{
+        .values = &[_]Value{
             .{ .integer = 1 },
         },
     };
@@ -163,9 +165,9 @@ test "heap file insert multiple tuples" {
     var heap = try HeapFile.init(allocator);
     defer heap.deinit();
 
-    const t1 = Tuple{ .values = &[_]tuple.Value{.{ .integer = 1 }} };
-    const t2 = Tuple{ .values = &[_]tuple.Value{.{ .integer = 2 }} };
-    const t3 = Tuple{ .values = &[_]tuple.Value{.{ .integer = 3 }} };
+    const t1 = Tuple{ .values = &[_]Value{.{ .integer = 1 }} };
+    const t2 = Tuple{ .values = &[_]Value{.{ .integer = 2 }} };
+    const t3 = Tuple{ .values = &[_]Value{.{ .integer = 3 }} };
 
     const rid1 = try heap.insert(&t1);
     const rid2 = try heap.insert(&t2);
@@ -193,7 +195,7 @@ test "heap file creates new page when full" {
     // Create a large tuple that takes most of a page
     const large_text = "x" ** 2000;
     const large_tuple = Tuple{
-        .values = &[_]tuple.Value{.{ .text = large_text }},
+        .values = &[_]Value{.{ .text = large_text }},
     };
 
     // First insert goes to page 0
@@ -217,7 +219,7 @@ test "heap file get and deserialize tuple" {
     defer heap.deinit();
 
     const original = Tuple{
-        .values = &[_]tuple.Value{
+        .values = &[_]Value{
             .{ .integer = 42 },
             .{ .text = "hello" },
             .{ .boolean = true },
@@ -259,9 +261,9 @@ test "heap file RID stability after other deletes" {
     var heap = try HeapFile.init(allocator);
     defer heap.deinit();
 
-    const t1 = Tuple{ .values = &[_]tuple.Value{.{ .integer = 100 }} };
-    const t2 = Tuple{ .values = &[_]tuple.Value{.{ .integer = 200 }} };
-    const t3 = Tuple{ .values = &[_]tuple.Value{.{ .integer = 300 }} };
+    const t1 = Tuple{ .values = &[_]Value{.{ .integer = 100 }} };
+    const t2 = Tuple{ .values = &[_]Value{.{ .integer = 200 }} };
+    const t3 = Tuple{ .values = &[_]Value{.{ .integer = 300 }} };
 
     const rid1 = try heap.insert(&t1);
     const rid2 = try heap.insert(&t2);
@@ -281,9 +283,9 @@ test "heap iterator scans all tuples" {
     var heap = try HeapFile.init(allocator);
     defer heap.deinit();
 
-    const t1 = Tuple{ .values = &[_]tuple.Value{.{ .integer = 1 }} };
-    const t2 = Tuple{ .values = &[_]tuple.Value{.{ .integer = 2 }} };
-    const t3 = Tuple{ .values = &[_]tuple.Value{.{ .integer = 3 }} };
+    const t1 = Tuple{ .values = &[_]Value{.{ .integer = 1 }} };
+    const t2 = Tuple{ .values = &[_]Value{.{ .integer = 2 }} };
+    const t3 = Tuple{ .values = &[_]Value{.{ .integer = 3 }} };
 
     _ = try heap.insert(&t1);
     _ = try heap.insert(&t2);
@@ -303,9 +305,9 @@ test "heap iterator skips deleted tuples" {
     var heap = try HeapFile.init(allocator);
     defer heap.deinit();
 
-    const t1 = Tuple{ .values = &[_]tuple.Value{.{ .integer = 1 }} };
-    const t2 = Tuple{ .values = &[_]tuple.Value{.{ .integer = 2 }} };
-    const t3 = Tuple{ .values = &[_]tuple.Value{.{ .integer = 3 }} };
+    const t1 = Tuple{ .values = &[_]Value{.{ .integer = 1 }} };
+    const t2 = Tuple{ .values = &[_]Value{.{ .integer = 2 }} };
+    const t3 = Tuple{ .values = &[_]Value{.{ .integer = 3 }} };
 
     _ = try heap.insert(&t1);
     const rid2 = try heap.insert(&t2);
@@ -327,7 +329,7 @@ test "heap iterator returns correct RIDs" {
     var heap = try HeapFile.init(allocator);
     defer heap.deinit();
 
-    const t = Tuple{ .values = &[_]tuple.Value{.{ .integer = 42 }} };
+    const t = Tuple{ .values = &[_]Value{.{ .integer = 42 }} };
 
     const rid1 = try heap.insert(&t);
     const rid2 = try heap.insert(&t);
@@ -362,7 +364,7 @@ test "insert reuses space in earlier pages after delete" {
     // Fill page 0 with large tuples
     const large_text = "x" ** 2000;
     const large_tuple = Tuple{
-        .values = &[_]tuple.Value{.{ .text = large_text }},
+        .values = &[_]Value{.{ .text = large_text }},
     };
 
     const rid1 = try heap.insert(&large_tuple); // page 0

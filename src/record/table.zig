@@ -1,6 +1,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const ast = @import("../sql/ast.zig");
+const Value = ast.Value;
 const tuple = @import("tuple.zig");
 const Tuple = tuple.Tuple;
 const Schema = tuple.Schema;
@@ -75,7 +77,7 @@ test "table insert and get" {
     defer table.deinit();
 
     const t = Tuple{
-        .values = &[_]tuple.Value{
+        .values = &[_]Value{
             .{ .integer = 42 },
             .{ .text = "alice" },
         },
@@ -99,7 +101,7 @@ test "table delete" {
     var table = try Table.init("test", schema, allocator);
     defer table.deinit();
 
-    const t = Tuple{ .values = &[_]tuple.Value{.{ .integer = 1 }} };
+    const t = Tuple{ .values = &[_]Value{.{ .integer = 1 }} };
     const rid = try table.insert(&t);
 
     table.delete(rid);

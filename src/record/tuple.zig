@@ -1,17 +1,13 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const ast = @import("../sql/ast.zig");
+const Value = ast.Value;
+
 pub const DataType = enum {
     integer,
     text,
     boolean,
-};
-
-pub const Value = union(enum) {
-    integer: i64,
-    text: []const u8,
-    boolean: bool,
-    null_value: void,
 };
 
 pub const ColumnDef = struct {
@@ -22,6 +18,15 @@ pub const ColumnDef = struct {
 
 pub const Schema = struct {
     columns: []const ColumnDef,
+
+    pub fn findColumnIndex(self: *const Schema, name: []const u8) ?usize {
+        for (self.columns, 0..) |c, i| {
+            if (std.mem.eql(u8, c.name, name)) {
+                return i;
+            }
+        }
+        return null;
+    }
 };
 
 pub const Tuple = struct {
