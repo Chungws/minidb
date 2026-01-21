@@ -21,6 +21,18 @@ pub const Executor = union(enum) {
             .project => |*pj| return try pj.next(),
         }
     }
+
+    pub fn deinit(self: *Executor) void {
+        switch (self.*) {
+            .filter => |*f| {
+                f.deinit();
+            },
+            .project => |*p| {
+                p.deinit();
+            },
+            .seq_scan => {},
+        }
+    }
 };
 
 pub const SeqScan = struct {
@@ -85,6 +97,10 @@ pub const Filter = struct {
             },
         }
     }
+
+    pub fn deinit(self: *Filter) void {
+        self.child.deinit();
+    }
 };
 
 pub const Project = struct {
@@ -111,6 +127,10 @@ pub const Project = struct {
             };
         }
         return null;
+    }
+
+    pub fn deinit(self: *Project) void {
+        self.child.deinit();
     }
 };
 
