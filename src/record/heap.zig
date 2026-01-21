@@ -231,7 +231,7 @@ test "heap file get and deserialize tuple" {
 
     // Deserialize and verify
     const schema = tuple.Schema{
-        .columns = &[_]tuple.ColumnDef{
+        .columns = &[_]ast.ColumnDef{
             .{ .name = "id", .data_type = .integer, .nullable = false },
             .{ .name = "name", .data_type = .text, .nullable = false },
             .{ .name = "active", .data_type = .boolean, .nullable = false },

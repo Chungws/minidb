@@ -143,7 +143,7 @@ test "seq_scan empty table returns null" {
     defer heap_file.deinit();
 
     const schema = Schema{
-        .columns = &[_]tuple.ColumnDef{
+        .columns = &[_]ast.ColumnDef{
             .{ .name = "id", .data_type = .integer, .nullable = false },
         },
     };
@@ -161,7 +161,7 @@ test "seq_scan returns all tuples" {
     defer heap_file.deinit();
 
     const schema = Schema{
-        .columns = &[_]tuple.ColumnDef{
+        .columns = &[_]ast.ColumnDef{
             .{ .name = "id", .data_type = .integer, .nullable = false },
         },
     };
@@ -200,7 +200,7 @@ test "seq_scan reset restarts scan" {
     defer heap_file.deinit();
 
     const schema = Schema{
-        .columns = &[_]tuple.ColumnDef{
+        .columns = &[_]ast.ColumnDef{
             .{ .name = "id", .data_type = .integer, .nullable = false },
         },
     };
@@ -231,7 +231,7 @@ test "executor with seq_scan" {
     defer heap_file.deinit();
 
     const schema = Schema{
-        .columns = &[_]tuple.ColumnDef{
+        .columns = &[_]ast.ColumnDef{
             .{ .name = "value", .data_type = .integer, .nullable = false },
         },
     };
@@ -255,7 +255,7 @@ test "filter passes matching tuples" {
     defer heap_file.deinit();
 
     const schema = Schema{
-        .columns = &[_]tuple.ColumnDef{
+        .columns = &[_]ast.ColumnDef{
             .{ .name = "age", .data_type = .integer, .nullable = false },
         },
     };
@@ -301,7 +301,7 @@ test "filter with no matches returns null" {
     defer heap_file.deinit();
 
     const schema = Schema{
-        .columns = &[_]tuple.ColumnDef{
+        .columns = &[_]ast.ColumnDef{
             .{ .name = "age", .data_type = .integer, .nullable = false },
         },
     };
@@ -333,7 +333,7 @@ test "filter with eq operator" {
     defer heap_file.deinit();
 
     const schema = Schema{
-        .columns = &[_]tuple.ColumnDef{
+        .columns = &[_]ast.ColumnDef{
             .{ .name = "id", .data_type = .integer, .nullable = false },
         },
     };
@@ -373,7 +373,7 @@ test "filter with and condition" {
     defer heap_file.deinit();
 
     const schema = Schema{
-        .columns = &[_]tuple.ColumnDef{
+        .columns = &[_]ast.ColumnDef{
             .{ .name = "age", .data_type = .integer, .nullable = false },
         },
     };
@@ -420,7 +420,7 @@ test "filter with or condition" {
     defer heap_file.deinit();
 
     const schema = Schema{
-        .columns = &[_]tuple.ColumnDef{
+        .columns = &[_]ast.ColumnDef{
             .{ .name = "id", .data_type = .integer, .nullable = false },
         },
     };
@@ -465,7 +465,7 @@ test "filter with not condition" {
     defer heap_file.deinit();
 
     const schema = Schema{
-        .columns = &[_]tuple.ColumnDef{
+        .columns = &[_]ast.ColumnDef{
             .{ .name = "id", .data_type = .integer, .nullable = false },
         },
     };
@@ -509,7 +509,7 @@ test "project selects specific columns" {
     defer heap_file.deinit();
 
     const schema = Schema{
-        .columns = &[_]tuple.ColumnDef{
+        .columns = &[_]ast.ColumnDef{
             .{ .name = "id", .data_type = .integer, .nullable = false },
             .{ .name = "name", .data_type = .text, .nullable = false },
             .{ .name = "age", .data_type = .integer, .nullable = false },
@@ -551,7 +551,7 @@ test "project reorders columns" {
     defer heap_file.deinit();
 
     const schema = Schema{
-        .columns = &[_]tuple.ColumnDef{
+        .columns = &[_]ast.ColumnDef{
             .{ .name = "a", .data_type = .integer, .nullable = false },
             .{ .name = "b", .data_type = .integer, .nullable = false },
         },
@@ -588,7 +588,7 @@ test "project with filter pipeline" {
     defer heap_file.deinit();
 
     const schema = Schema{
-        .columns = &[_]tuple.ColumnDef{
+        .columns = &[_]ast.ColumnDef{
             .{ .name = "id", .data_type = .integer, .nullable = false },
             .{ .name = "name", .data_type = .text, .nullable = false },
         },

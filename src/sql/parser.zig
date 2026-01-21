@@ -175,6 +175,7 @@ pub const Parser = struct {
             try columns.append(self.allocator, ast.ColumnDef{
                 .data_type = column_type,
                 .name = column_name,
+                .nullable = false,
             });
             self.advance();
         }
@@ -316,9 +317,9 @@ fn convertTokenToAstValue(t: Token) !ast.Value {
 
 fn convertTokenToAstColumnType(t: TokenType) !ast.DataType {
     switch (t) {
-        .int_type => return .INTEGER,
-        .text_type => return .TEXT,
-        .bool_type => return .BOOL,
+        .int_type => return .integer,
+        .text_type => return .text,
+        .bool_type => return .boolean,
         else => return error.UnexpectedToken,
     }
 }
@@ -614,13 +615,13 @@ test "parse CREATE TABLE statement" {
     try std.testing.expectEqual(@as(usize, 3), create.columns.len);
 
     try std.testing.expectEqualStrings("id", create.columns[0].name);
-    try std.testing.expectEqual(ast.DataType.INTEGER, create.columns[0].data_type);
+    try std.testing.expectEqual(ast.DataType.integer, create.columns[0].data_type);
 
     try std.testing.expectEqualStrings("name", create.columns[1].name);
-    try std.testing.expectEqual(ast.DataType.TEXT, create.columns[1].data_type);
+    try std.testing.expectEqual(ast.DataType.text, create.columns[1].data_type);
 
     try std.testing.expectEqualStrings("active", create.columns[2].name);
-    try std.testing.expectEqual(ast.DataType.BOOL, create.columns[2].data_type);
+    try std.testing.expectEqual(ast.DataType.boolean, create.columns[2].data_type);
 }
 
 test "parse CREATE TABLE with single column" {
@@ -634,7 +635,7 @@ test "parse CREATE TABLE with single column" {
     try std.testing.expectEqualStrings("t", create.table_name);
     try std.testing.expectEqual(@as(usize, 1), create.columns.len);
     try std.testing.expectEqualStrings("id", create.columns[0].name);
-    try std.testing.expectEqual(ast.DataType.INTEGER, create.columns[0].data_type);
+    try std.testing.expectEqual(ast.DataType.integer, create.columns[0].data_type);
 }
 
 test "parse CREATE TABLE with all types" {
@@ -646,9 +647,9 @@ test "parse CREATE TABLE with all types" {
     const create = stmt.create_table;
 
     try std.testing.expectEqual(@as(usize, 3), create.columns.len);
-    try std.testing.expectEqual(ast.DataType.INTEGER, create.columns[0].data_type);
-    try std.testing.expectEqual(ast.DataType.TEXT, create.columns[1].data_type);
-    try std.testing.expectEqual(ast.DataType.BOOL, create.columns[2].data_type);
+    try std.testing.expectEqual(ast.DataType.integer, create.columns[0].data_type);
+    try std.testing.expectEqual(ast.DataType.text, create.columns[1].data_type);
+    try std.testing.expectEqual(ast.DataType.boolean, create.columns[2].data_type);
 }
 
 test "parse error on invalid statement" {

@@ -1,9 +1,9 @@
 const std = @import("std");
 
 pub const DataType = enum {
-    INTEGER,
-    TEXT,
-    BOOL,
+    integer,
+    text,
+    boolean,
 };
 
 pub const Statement = union(enum) {
@@ -31,6 +31,7 @@ pub const CreateTableStatement = struct {
 pub const ColumnDef = struct {
     name: []const u8,
     data_type: DataType,
+    nullable: bool,
 };
 
 pub const Condition = union(enum) {

@@ -55,7 +55,7 @@ pub const Table = struct {
 test "table init and deinit" {
     const allocator = std.testing.allocator;
     const schema = Schema{
-        .columns = &[_]tuple.ColumnDef{
+        .columns = &[_]ast.ColumnDef{
             .{ .name = "id", .data_type = .integer, .nullable = false },
         },
     };
@@ -68,7 +68,7 @@ test "table init and deinit" {
 test "table insert and get" {
     const allocator = std.testing.allocator;
     const schema = Schema{
-        .columns = &[_]tuple.ColumnDef{
+        .columns = &[_]ast.ColumnDef{
             .{ .name = "id", .data_type = .integer, .nullable = false },
             .{ .name = "name", .data_type = .text, .nullable = false },
         },
@@ -94,7 +94,7 @@ test "table insert and get" {
 test "table delete" {
     const allocator = std.testing.allocator;
     const schema = Schema{
-        .columns = &[_]tuple.ColumnDef{
+        .columns = &[_]ast.ColumnDef{
             .{ .name = "id", .data_type = .integer, .nullable = false },
         },
     };

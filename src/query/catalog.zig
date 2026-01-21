@@ -38,8 +38,8 @@ pub const Catalog = struct {
 // ============ Tests ============
 
 const tuple = @import("../record/tuple.zig");
-const ColumnDef = tuple.ColumnDef;
 const ast = @import("../sql/ast.zig");
+const ColumnDef = ast.ColumnDef;
 
 test "catalog init and deinit" {
     const allocator = std.testing.allocator;

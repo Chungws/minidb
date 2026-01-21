@@ -3,18 +3,8 @@ const Allocator = std.mem.Allocator;
 
 const ast = @import("../sql/ast.zig");
 const Value = ast.Value;
-
-pub const DataType = enum {
-    integer,
-    text,
-    boolean,
-};
-
-pub const ColumnDef = struct {
-    name: []const u8,
-    data_type: DataType,
-    nullable: bool,
-};
+const DataType = ast.DataType;
+const ColumnDef = ast.ColumnDef;
 
 pub const Schema = struct {
     columns: []const ColumnDef,
