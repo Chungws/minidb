@@ -10,6 +10,7 @@ pub const Statement = union(enum) {
     select: SelectStatement,
     insert: InsertStatement,
     create_table: CreateTableStatement,
+    create_index: CreateIndexStatement,
 };
 
 pub const SelectStatement = struct {
@@ -26,6 +27,12 @@ pub const InsertStatement = struct {
 pub const CreateTableStatement = struct {
     table_name: []const u8,
     columns: []const ColumnDef,
+};
+
+pub const CreateIndexStatement = struct {
+    index_name: []const u8,
+    table_name: []const u8,
+    column_name: []const u8,
 };
 
 pub const ColumnDef = struct {

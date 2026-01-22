@@ -149,6 +149,8 @@ const keywords = std.StaticStringMap(TokenType).initComptime(.{
     .{ "values", .values },
     .{ "create", .create },
     .{ "table", .table },
+    .{ "index", .index },
+    .{ "on", .on },
     .{ "int", .int_type },
     .{ "text", .text_type },
     .{ "bool", .bool_type },
@@ -358,5 +360,19 @@ test "tabs and newlines" {
     try std.testing.expectEqual(TokenType.asterisk, lexer.nextToken().type);
     try std.testing.expectEqual(TokenType.from, lexer.nextToken().type);
     try std.testing.expectEqual(TokenType.identifier, lexer.nextToken().type);
+    try std.testing.expectEqual(TokenType.eof, lexer.nextToken().type);
+}
+
+test "index and on keywords" {
+    var lexer = Lexer.init("CREATE INDEX idx ON users (id)");
+
+    try std.testing.expectEqual(TokenType.create, lexer.nextToken().type);
+    try std.testing.expectEqual(TokenType.index, lexer.nextToken().type);
+    try std.testing.expectEqual(TokenType.identifier, lexer.nextToken().type);
+    try std.testing.expectEqual(TokenType.on, lexer.nextToken().type);
+    try std.testing.expectEqual(TokenType.identifier, lexer.nextToken().type);
+    try std.testing.expectEqual(TokenType.lparen, lexer.nextToken().type);
+    try std.testing.expectEqual(TokenType.identifier, lexer.nextToken().type);
+    try std.testing.expectEqual(TokenType.rparen, lexer.nextToken().type);
     try std.testing.expectEqual(TokenType.eof, lexer.nextToken().type);
 }

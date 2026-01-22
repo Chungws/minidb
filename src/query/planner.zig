@@ -48,9 +48,14 @@ pub const Planner = struct {
         _ = try table.insert(&t);
     }
 
-    pub fn executeCreate(self: *Planner, stmt: ast.CreateTableStatement) !void {
+    pub fn executeCreateTable(self: *Planner, stmt: ast.CreateTableStatement) !void {
         const schema = Schema{ .columns = stmt.columns };
         try self.catalog.createTable(stmt.table_name, schema);
+    }
+
+    pub fn executeCreateIndex(self: *Planner, stmt: ast.CreateIndexStatement) !void {
+        const table = self.catalog.getTable(stmt.table_name) orelse return error.TableNotFound;
+        try table.createIndex(stmt.column_name);
     }
 
     pub fn planSelect(self: *Planner, stmt: ast.SelectStatement) !*Executor {
@@ -284,7 +289,7 @@ test "executeCreate creates table" {
         },
     };
 
-    try planner.executeCreate(stmt);
+    try planner.executeCreateTable(stmt);
 
     const table = catalog.getTable("users");
     try std.testing.expect(table != null);
@@ -308,7 +313,7 @@ test "executeInsert inserts row" {
             .{ .name = "name", .data_type = .text, .nullable = false },
         },
     };
-    try planner.executeCreate(create_stmt);
+    try planner.executeCreateTable(create_stmt);
 
     // Insert row
     const insert_stmt = ast.InsertStatement{
@@ -467,4 +472,50 @@ test "planner uses SeqScan for neq condition even with index" {
 
     // Should use Filter (not IndexScan)
     try std.testing.expect(exec.* == .filter);
+}
+
+test "executeCreateIndex creates index" {
+    const allocator = std.testing.allocator;
+
+    var catalog = Catalog.init(allocator);
+    defer catalog.deinit();
+
+    const schema = Schema{
+        .columns = &[_]ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+        },
+    };
+    try catalog.createTable("nums", schema);
+
+    var planner = Planner{ .catalog = &catalog, .allocator = allocator };
+
+    const stmt = ast.CreateIndexStatement{
+        .index_name = "idx_id",
+        .table_name = "nums",
+        .column_name = "id",
+    };
+
+    try planner.executeCreateIndex(stmt);
+
+    // Verify index exists
+    const table = catalog.getTable("nums").?;
+    try std.testing.expect(table.indexes.get("id") != null);
+}
+
+test "executeCreateIndex table not found" {
+    const allocator = std.testing.allocator;
+
+    var catalog = Catalog.init(allocator);
+    defer catalog.deinit();
+
+    var planner = Planner{ .catalog = &catalog, .allocator = allocator };
+
+    const stmt = ast.CreateIndexStatement{
+        .index_name = "idx_id",
+        .table_name = "no_such_table",
+        .column_name = "id",
+    };
+
+    const result = planner.executeCreateIndex(stmt);
+    try std.testing.expectError(error.TableNotFound, result);
 }

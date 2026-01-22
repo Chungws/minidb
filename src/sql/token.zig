@@ -8,6 +8,8 @@ pub const TokenType = enum {
     values,
     create,
     table,
+    index,
+    on,
 
     // Types
     int_type, // INT

@@ -29,6 +29,7 @@ pub const SelectResult = struct {
 
 pub const ExecuteResult = union(enum) {
     table_created,
+    index_created,
     row_inserted,
     select: SelectResult,
     err: ExecuteError,
@@ -49,8 +50,12 @@ fn executeStatement(catalog: *Catalog, stmt: Statement, allocator: std.mem.Alloc
 
     switch (stmt) {
         .create_table => |crt| {
-            planner.executeCreate(crt) catch |e| return .{ .err = .{ .execute = e } };
+            planner.executeCreateTable(crt) catch |e| return .{ .err = .{ .execute = e } };
             return .table_created;
+        },
+        .create_index => |cri| {
+            planner.executeCreateIndex(cri) catch |e| return .{ .err = .{ .execute = e } };
+            return .index_created;
         },
         .insert => |ins| {
             planner.executeInsert(ins) catch |e| return .{ .err = .{ .execute = e } };
@@ -91,6 +96,7 @@ fn printRow(row: Tuple, writer: *std.Io.Writer) !void {
 fn printResult(result: *ExecuteResult, writer: *std.Io.Writer) !void {
     switch (result.*) {
         .table_created => try writer.writeAll("Table created\n"),
+        .index_created => try writer.writeAll("Index created\n"),
         .row_inserted => try writer.writeAll("1 row inserted\n"),
         .select => |*sel| {
             defer sel.deinit();
@@ -310,4 +316,42 @@ test "execute: INSERT and SELECT with NULL" {
     try std.testing.expectEqual(@as(usize, 1), sel.rows.items.len);
     try std.testing.expectEqual(@as(i64, 1), sel.rows.items[0].values[0].integer);
     try std.testing.expect(sel.rows.items[0].values[1] == .null_value);
+}
+
+test "execute: CREATE INDEX" {
+    const allocator = std.testing.allocator;
+
+    var catalog = Catalog.init(allocator);
+    defer catalog.deinit();
+
+    _ = execute(&catalog, "CREATE TABLE users (id INT NOT NULL, name TEXT)", allocator);
+    const result = execute(&catalog, "CREATE INDEX idx_id ON users (id)", allocator);
+    try std.testing.expect(result == .index_created);
+
+    // Verify index exists
+    const table = catalog.getTable("users").?;
+    try std.testing.expect(table.indexes.get("id") != null);
+}
+
+test "execute: SELECT uses index after CREATE INDEX" {
+    const allocator = std.testing.allocator;
+
+    var catalog = Catalog.init(allocator);
+    defer catalog.deinit();
+
+    _ = execute(&catalog, "CREATE TABLE users (id INT NOT NULL, name TEXT)", allocator);
+    _ = execute(&catalog, "INSERT INTO users VALUES (10, 'Alice')", allocator);
+    _ = execute(&catalog, "INSERT INTO users VALUES (20, 'Bob')", allocator);
+    _ = execute(&catalog, "INSERT INTO users VALUES (30, 'Charlie')", allocator);
+    _ = execute(&catalog, "CREATE INDEX idx_id ON users (id)", allocator);
+
+    var result = execute(&catalog, "SELECT * FROM users WHERE id = 20", allocator);
+    try std.testing.expect(result == .select);
+
+    var sel = &result.select;
+    defer sel.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), sel.rows.items.len);
+    try std.testing.expectEqual(@as(i64, 20), sel.rows.items[0].values[0].integer);
+    try std.testing.expectEqualStrings("Bob", sel.rows.items[0].values[1].text);
 }

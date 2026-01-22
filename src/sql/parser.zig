@@ -10,6 +10,7 @@ const Statement = ast.Statement;
 const SelectStatement = ast.SelectStatement;
 const InsertStatement = ast.InsertStatement;
 const CreateTableStatement = ast.CreateTableStatement;
+const CreateIndexStatement = ast.CreateIndexStatement;
 
 const ParserPoolError = error{
     UnexpectedToken,
@@ -43,6 +44,7 @@ pub const Parser = struct {
             .create_table => {
                 self.allocator.free(statement.create_table.columns);
             },
+            .create_index => {},
         }
     }
 
@@ -81,9 +83,7 @@ pub const Parser = struct {
                 };
             },
             TokenType.create => {
-                return Statement{
-                    .create_table = try self.parseCreateTable(),
-                };
+                return try self.parseCreate();
             },
             else => return error.UnexpectedToken,
         }
@@ -153,8 +153,19 @@ pub const Parser = struct {
         };
     }
 
-    fn parseCreateTable(self: *Parser) !CreateTableStatement {
+    fn parseCreate(self: *Parser) !Statement {
         try self.expect(.create);
+
+        const next = self.current.type;
+        if (next == .table) {
+            return try self.parseCreateTable();
+        } else if (next == .index) {
+            return try self.parseCreateIndex();
+        }
+        return error.UnexpectedToken;
+    }
+
+    fn parseCreateTable(self: *Parser) !Statement {
         try self.expect(.table);
 
         const table_name = self.current.lexeme;
@@ -194,10 +205,35 @@ pub const Parser = struct {
         }
         try self.expect(.rparen);
 
-        return CreateTableStatement{
+        return Statement{ .create_table = CreateTableStatement{
             .table_name = table_name,
             .columns = try columns.toOwnedSlice(self.allocator),
-        };
+        } };
+    }
+
+    fn parseCreateIndex(self: *Parser) !Statement {
+        try self.expect(.index);
+
+        const index_name = self.current.lexeme;
+        try self.expect(.identifier);
+
+        try self.expect(.on);
+
+        const table_name = self.current.lexeme;
+        try self.expect(.identifier);
+
+        try self.expect(.lparen);
+
+        const column_name = self.current.lexeme;
+        try self.expect(.identifier);
+
+        try self.expect(.rparen);
+
+        return Statement{ .create_index = CreateIndexStatement{
+            .index_name = index_name,
+            .table_name = table_name,
+            .column_name = column_name,
+        } };
     }
 
     fn parseCondition(self: *Parser) anyerror!ast.Condition {
@@ -711,4 +747,34 @@ test "parse INSERT with NULL value" {
     try std.testing.expectEqual(@as(i64, 1), insert.values[0].integer);
     try std.testing.expectEqual(ast.Value.null_value, std.meta.activeTag(insert.values[1]));
     try std.testing.expectEqualStrings("test", insert.values[2].text);
+}
+
+test "parse CREATE INDEX" {
+    const allocator = std.testing.allocator;
+    var parser = Parser.init("CREATE INDEX idx_id ON users (id)", allocator);
+
+    const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
+
+    try std.testing.expect(stmt == .create_index);
+    const create_index = stmt.create_index;
+
+    try std.testing.expectEqualStrings("idx_id", create_index.index_name);
+    try std.testing.expectEqualStrings("users", create_index.table_name);
+    try std.testing.expectEqualStrings("id", create_index.column_name);
+}
+
+test "parse CREATE INDEX case insensitive" {
+    const allocator = std.testing.allocator;
+    var parser = Parser.init("create index IDX on USERS (NAME)", allocator);
+
+    const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
+
+    try std.testing.expect(stmt == .create_index);
+    const create_index = stmt.create_index;
+
+    try std.testing.expectEqualStrings("IDX", create_index.index_name);
+    try std.testing.expectEqualStrings("USERS", create_index.table_name);
+    try std.testing.expectEqualStrings("NAME", create_index.column_name);
 }
