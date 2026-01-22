@@ -18,6 +18,12 @@ pub const Catalog = struct {
     pub fn deinit(self: *Catalog) void {
         var it = self.tables.valueIterator();
         while (it.next()) |table| {
+            self.allocator.free(table.*.name);
+            for (table.*.schema.columns) |col| {
+                self.allocator.free(col.name);
+            }
+            self.allocator.free(table.*.schema.columns);
+
             table.*.deinit();
             self.allocator.destroy(table.*);
         }
@@ -25,9 +31,20 @@ pub const Catalog = struct {
     }
 
     pub fn createTable(self: *Catalog, name: []const u8, schema: Schema) !void {
+        const owned_name = try self.allocator.dupe(u8, name);
+        var owned_columns = try self.allocator.alloc(ColumnDef, schema.columns.len);
+        for (schema.columns, 0..) |col, i| {
+            owned_columns[i] = ColumnDef{
+                .name = try self.allocator.dupe(u8, col.name), // 이름도 복사!
+                .data_type = col.data_type,
+                .nullable = col.nullable,
+            };
+        }
+        const owned_schema = Schema{ .columns = owned_columns };
+
         const table_ptr = try self.allocator.create(Table);
-        table_ptr.* = try Table.init(name, schema, self.allocator);
-        try self.tables.put(name, table_ptr);
+        table_ptr.* = try Table.init(owned_name, owned_schema, self.allocator);
+        try self.tables.put(owned_name, table_ptr);
     }
 
     pub fn getTable(self: *const Catalog, name: []const u8) ?*Table {

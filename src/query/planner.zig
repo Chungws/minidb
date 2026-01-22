@@ -11,6 +11,7 @@ const Filter = executor.Filter;
 const Project = executor.Project;
 
 const PlannerError = error{
+    ColumnCountMismatch,
     TableNotFound,
 };
 
@@ -34,6 +35,11 @@ pub const Planner = struct {
 
     pub fn executeInsert(self: *Planner, stmt: ast.InsertStatement) !void {
         const table = self.catalog.getTable(stmt.table_name) orelse return error.TableNotFound;
+
+        if (stmt.values.len != table.schema.columns.len) {
+            return error.ColumnCountMismatch;
+        }
+
         const t = Tuple{ .values = stmt.values };
         _ = try table.insert(&t);
     }
