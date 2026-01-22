@@ -7,18 +7,22 @@ const Schema = tuple.Schema;
 const heap = @import("../record/heap.zig");
 const HeapFile = heap.HeapFile;
 const HeapIterator = heap.HeapIterator;
+const RID = heap.RID;
 const ast = @import("../sql/ast.zig");
+const BTree = @import("../index/btree.zig").BTree;
 
 pub const Executor = union(enum) {
     seq_scan: SeqScan,
     filter: Filter,
     project: Project,
+    index_scan: IndexScan,
 
     pub fn next(self: *Executor) anyerror!?Tuple {
         switch (self.*) {
             .seq_scan => |*scan| return try scan.next(),
             .filter => |*ft| return try ft.next(),
             .project => |*pj| return try pj.next(),
+            .index_scan => |*is| return try is.next(),
         }
     }
 
@@ -29,6 +33,9 @@ pub const Executor = union(enum) {
             },
             .project => |*p| {
                 p.deinit();
+            },
+            .index_scan => |*i| {
+                i.deinit();
             },
             .seq_scan => {},
         }
@@ -131,6 +138,94 @@ pub const Project = struct {
 
     pub fn deinit(self: *Project) void {
         self.child.deinit();
+    }
+};
+
+pub const IndexScan = struct {
+    btree: *const BTree,
+    heap_file: *const HeapFile,
+    schema: Schema,
+
+    search_key: ?i64,
+    range_start: ?i64,
+    range_end: ?i64,
+
+    rids: ?std.ArrayList(RID),
+    current_idx: usize,
+    allocator: Allocator,
+
+    pub fn init(btree: *const BTree, heap_file: *const HeapFile, schema: Schema, condition: ast.SimpleCondition, allocator: Allocator) IndexScan {
+        var index = IndexScan{
+            .btree = btree,
+            .heap_file = heap_file,
+            .schema = schema,
+            .search_key = null,
+            .range_start = null,
+            .range_end = null,
+            .rids = null,
+            .current_idx = 0,
+            .allocator = allocator,
+        };
+
+        const val = condition.value.integer;
+        switch (condition.op) {
+            .eq => {
+                index.search_key = val;
+            },
+            .gte => {
+                index.range_start = val;
+            },
+            .gt => {
+                index.range_start = val + 1;
+            },
+            .lte => {
+                index.range_end = val;
+            },
+            .lt => {
+                index.range_end = val - 1;
+            },
+            else => {},
+        }
+
+        return index;
+    }
+
+    pub fn available(condition: ast.SimpleCondition) bool {
+        return condition.op != .neq;
+    }
+
+    pub fn next(self: *IndexScan) !?Tuple {
+        if (self.rids == null) {
+            if (self.search_key) |key| {
+                if (try self.btree.search(key)) |rid| {
+                    self.rids = std.ArrayList(RID).empty;
+                    try self.rids.?.append(self.allocator, rid);
+                }
+            } else {
+                self.rids = try self.btree.rangeScan(
+                    self.range_start orelse std.math.minInt(i64),
+                    self.range_end orelse std.math.maxInt(i64),
+                );
+            }
+        }
+
+        if (self.rids) |rids| {
+            if (self.current_idx >= rids.items.len) return null;
+            const rid = rids.items[self.current_idx];
+            self.current_idx += 1;
+            if (self.heap_file.get(rid)) |data| {
+                return try Tuple.deserialize(data, self.schema, self.allocator);
+            }
+        }
+
+        return null;
+    }
+
+    pub fn deinit(self: *IndexScan) void {
+        if (self.rids) |*rids| {
+            var r = rids;
+            r.deinit(self.allocator);
+        }
     }
 };
 
@@ -628,4 +723,150 @@ test "project with filter pipeline" {
     try std.testing.expectEqualStrings("Charlie", result2.values[0].text);
 
     try std.testing.expect((try project.next()) == null);
+}
+
+test "index_scan with eq condition" {
+    const allocator = std.testing.allocator;
+
+    var heap_file = try HeapFile.init(allocator);
+    defer heap_file.deinit();
+
+    const schema = Schema{
+        .columns = &[_]ast.ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+            .{ .name = "name", .data_type = .text, .nullable = false },
+        },
+    };
+
+    // Insert tuples
+    const t1 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 10 }, .{ .text = "Alice" } } };
+    const t2 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 20 }, .{ .text = "Bob" } } };
+    const t3 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 30 }, .{ .text = "Charlie" } } };
+    const rid1 = try heap_file.insert(&t1);
+    const rid2 = try heap_file.insert(&t2);
+    const rid3 = try heap_file.insert(&t3);
+
+    // Build BTree index
+    var btree = BTree.init(allocator);
+    defer btree.deinit();
+    try btree.insert(10, rid1);
+    try btree.insert(20, rid2);
+    try btree.insert(30, rid3);
+
+    // IndexScan with id = 20
+    var index_scan = IndexScan.init(&btree, &heap_file, schema, .{
+        .column = "id",
+        .op = .eq,
+        .value = .{ .integer = 20 },
+    }, allocator);
+    defer index_scan.deinit();
+
+    var result = (try index_scan.next()).?;
+    defer result.deinit(allocator);
+    try std.testing.expectEqual(@as(i64, 20), result.values[0].integer);
+    try std.testing.expectEqualStrings("Bob", result.values[1].text);
+
+    // Should return only one result
+    try std.testing.expect((try index_scan.next()) == null);
+}
+
+test "index_scan with range condition gte" {
+    const allocator = std.testing.allocator;
+
+    var heap_file = try HeapFile.init(allocator);
+    defer heap_file.deinit();
+
+    const schema = Schema{
+        .columns = &[_]ast.ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+        },
+    };
+
+    // Insert tuples
+    const t1 = Tuple{ .values = &[_]ast.Value{.{ .integer = 10 }} };
+    const t2 = Tuple{ .values = &[_]ast.Value{.{ .integer = 20 }} };
+    const t3 = Tuple{ .values = &[_]ast.Value{.{ .integer = 30 }} };
+    const rid1 = try heap_file.insert(&t1);
+    const rid2 = try heap_file.insert(&t2);
+    const rid3 = try heap_file.insert(&t3);
+
+    // Build BTree index
+    var btree = BTree.init(allocator);
+    defer btree.deinit();
+    try btree.insert(10, rid1);
+    try btree.insert(20, rid2);
+    try btree.insert(30, rid3);
+
+    // IndexScan with id >= 20
+    var index_scan = IndexScan.init(&btree, &heap_file, schema, .{
+        .column = "id",
+        .op = .gte,
+        .value = .{ .integer = 20 },
+    }, allocator);
+    defer index_scan.deinit();
+
+    var result1 = (try index_scan.next()).?;
+    defer result1.deinit(allocator);
+    try std.testing.expectEqual(@as(i64, 20), result1.values[0].integer);
+
+    var result2 = (try index_scan.next()).?;
+    defer result2.deinit(allocator);
+    try std.testing.expectEqual(@as(i64, 30), result2.values[0].integer);
+
+    try std.testing.expect((try index_scan.next()) == null);
+}
+
+test "index_scan with range condition lte" {
+    const allocator = std.testing.allocator;
+
+    var heap_file = try HeapFile.init(allocator);
+    defer heap_file.deinit();
+
+    const schema = Schema{
+        .columns = &[_]ast.ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+        },
+    };
+
+    // Insert tuples
+    const t1 = Tuple{ .values = &[_]ast.Value{.{ .integer = 10 }} };
+    const t2 = Tuple{ .values = &[_]ast.Value{.{ .integer = 20 }} };
+    const t3 = Tuple{ .values = &[_]ast.Value{.{ .integer = 30 }} };
+    const rid1 = try heap_file.insert(&t1);
+    const rid2 = try heap_file.insert(&t2);
+    const rid3 = try heap_file.insert(&t3);
+
+    // Build BTree index
+    var btree = BTree.init(allocator);
+    defer btree.deinit();
+    try btree.insert(10, rid1);
+    try btree.insert(20, rid2);
+    try btree.insert(30, rid3);
+
+    // IndexScan with id <= 20
+    var index_scan = IndexScan.init(&btree, &heap_file, schema, .{
+        .column = "id",
+        .op = .lte,
+        .value = .{ .integer = 20 },
+    }, allocator);
+    defer index_scan.deinit();
+
+    var result1 = (try index_scan.next()).?;
+    defer result1.deinit(allocator);
+    try std.testing.expectEqual(@as(i64, 10), result1.values[0].integer);
+
+    var result2 = (try index_scan.next()).?;
+    defer result2.deinit(allocator);
+    try std.testing.expectEqual(@as(i64, 20), result2.values[0].integer);
+
+    try std.testing.expect((try index_scan.next()) == null);
+}
+
+test "index_scan available returns false for neq" {
+    try std.testing.expect(IndexScan.available(.{ .column = "id", .op = .eq, .value = .{ .integer = 1 } }));
+    try std.testing.expect(IndexScan.available(.{ .column = "id", .op = .gt, .value = .{ .integer = 1 } }));
+    try std.testing.expect(IndexScan.available(.{ .column = "id", .op = .gte, .value = .{ .integer = 1 } }));
+    try std.testing.expect(IndexScan.available(.{ .column = "id", .op = .lt, .value = .{ .integer = 1 } }));
+    try std.testing.expect(IndexScan.available(.{ .column = "id", .op = .lte, .value = .{ .integer = 1 } }));
+    try std.testing.expect(!IndexScan.available(.{ .column = "id", .op = .neq, .value = .{ .integer = 1 } }));
 }

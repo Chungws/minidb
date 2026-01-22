@@ -9,6 +9,15 @@ const ColumnDef = ast.ColumnDef;
 pub const Schema = struct {
     columns: []const ColumnDef,
 
+    pub fn findColumnDef(self: *const Schema, name: []const u8) ?ColumnDef {
+        for (self.columns) |c| {
+            if (std.mem.eql(u8, c.name, name)) {
+                return c;
+            }
+        }
+        return null;
+    }
+
     pub fn findColumnIndex(self: *const Schema, name: []const u8) ?usize {
         for (self.columns, 0..) |c, i| {
             if (std.mem.eql(u8, c.name, name)) {
@@ -319,4 +328,26 @@ test "serialize and deserialize tuple with all NULL values" {
     try std.testing.expectEqual(Value.null_value, std.meta.activeTag(deserialized.values[0]));
     try std.testing.expectEqual(Value.null_value, std.meta.activeTag(deserialized.values[1]));
     try std.testing.expectEqual(Value.null_value, std.meta.activeTag(deserialized.values[2]));
+}
+
+test "schema findColumnDef returns column definition" {
+    const schema = Schema{
+        .columns = &[_]ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+            .{ .name = "name", .data_type = .text, .nullable = true },
+        },
+    };
+
+    const id_col = schema.findColumnDef("id");
+    try std.testing.expect(id_col != null);
+    try std.testing.expectEqual(DataType.integer, id_col.?.data_type);
+    try std.testing.expectEqual(false, id_col.?.nullable);
+
+    const name_col = schema.findColumnDef("name");
+    try std.testing.expect(name_col != null);
+    try std.testing.expectEqual(DataType.text, name_col.?.data_type);
+    try std.testing.expectEqual(true, name_col.?.nullable);
+
+    const missing = schema.findColumnDef("nonexistent");
+    try std.testing.expect(missing == null);
 }

@@ -9,6 +9,7 @@ const Executor = executor.Executor;
 const SeqScan = executor.SeqScan;
 const Filter = executor.Filter;
 const Project = executor.Project;
+const IndexScan = executor.IndexScan;
 
 const PlannerError = error{
     ColumnCountMismatch,
@@ -27,6 +28,9 @@ pub const Planner = struct {
             .project => |*p| {
                 self.allocator.free(p.column_indices); // 여기서 free
                 self.destroyPlan(p.child);
+            },
+            .index_scan => |*i| {
+                i.deinit();
             },
             .seq_scan => {},
         }
@@ -53,21 +57,34 @@ pub const Planner = struct {
         const table = self.catalog.getTable(stmt.table_name) orelse return error.TableNotFound;
 
         var exec_ptr = try self.allocator.create(Executor);
-        exec_ptr.* = Executor{
-            .seq_scan = SeqScan.init(&table.heap_file, table.schema, self.allocator),
-        };
-
+        var use_index = false;
         if (stmt.where) |cond| {
-            const filter_ptr = try self.allocator.create(Executor);
-            filter_ptr.* = Executor{
-                .filter = Filter{
-                    .child = exec_ptr,
-                    .condition = cond,
-                    .schema = table.schema,
-                    .allocator = self.allocator,
-                },
+            if (cond == .simple and IndexScan.available(cond.simple)) {
+                if (table.indexes.get(cond.simple.column)) |btree| {
+                    exec_ptr.* = Executor{
+                        .index_scan = IndexScan.init(btree, &table.heap_file, table.schema, cond.simple, self.allocator),
+                    };
+                    use_index = true;
+                }
+            }
+        }
+
+        if (!use_index) {
+            exec_ptr.* = Executor{
+                .seq_scan = SeqScan.init(&table.heap_file, table.schema, self.allocator),
             };
-            exec_ptr = filter_ptr;
+            if (stmt.where) |cond| {
+                const filter_ptr = try self.allocator.create(Executor);
+                filter_ptr.* = Executor{
+                    .filter = Filter{
+                        .child = exec_ptr,
+                        .condition = cond,
+                        .schema = table.schema,
+                        .allocator = self.allocator,
+                    },
+                };
+                exec_ptr = filter_ptr;
+            }
         }
 
         if (!isSelectAll(stmt.columns)) {
@@ -331,4 +348,123 @@ test "executeInsert table not found" {
 
     const result = planner.executeInsert(stmt);
     try std.testing.expectError(error.TableNotFound, result);
+}
+
+test "planner uses IndexScan when index exists" {
+    const allocator = std.testing.allocator;
+
+    var catalog = Catalog.init(allocator);
+    defer catalog.deinit();
+
+    const schema = Schema{
+        .columns = &[_]ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+            .{ .name = "name", .data_type = .text, .nullable = false },
+        },
+    };
+    try catalog.createTable("users", schema);
+
+    const table = catalog.getTable("users").?;
+    const t1 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 10 }, .{ .text = "Alice" } } };
+    const t2 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 20 }, .{ .text = "Bob" } } };
+    const t3 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 30 }, .{ .text = "Charlie" } } };
+    _ = try table.insert(&t1);
+    _ = try table.insert(&t2);
+    _ = try table.insert(&t3);
+
+    // Create index on id
+    try table.createIndex("id");
+
+    var planner = Planner{ .catalog = &catalog, .allocator = allocator };
+
+    // SELECT * FROM users WHERE id = 20
+    const stmt = ast.SelectStatement{
+        .columns = &[_][]const u8{"*"},
+        .table_name = "users",
+        .where = .{ .simple = .{ .column = "id", .op = .eq, .value = .{ .integer = 20 } } },
+    };
+
+    const exec = try planner.planSelect(stmt);
+    defer planner.destroyPlan(exec);
+
+    // Should use IndexScan
+    try std.testing.expect(exec.* == .index_scan);
+
+    var result = (try exec.next()).?;
+    defer result.deinit(allocator);
+    try std.testing.expectEqual(@as(i64, 20), result.values[0].integer);
+    try std.testing.expectEqualStrings("Bob", result.values[1].text);
+
+    try std.testing.expect((try exec.next()) == null);
+}
+
+test "planner uses SeqScan when no index" {
+    const allocator = std.testing.allocator;
+
+    var catalog = Catalog.init(allocator);
+    defer catalog.deinit();
+
+    const schema = Schema{
+        .columns = &[_]ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+        },
+    };
+    try catalog.createTable("nums", schema);
+
+    const table = catalog.getTable("nums").?;
+    const t1 = Tuple{ .values = &[_]ast.Value{.{ .integer = 10 }} };
+    _ = try table.insert(&t1);
+
+    // No index created
+
+    var planner = Planner{ .catalog = &catalog, .allocator = allocator };
+
+    // SELECT * FROM nums WHERE id = 10
+    const stmt = ast.SelectStatement{
+        .columns = &[_][]const u8{"*"},
+        .table_name = "nums",
+        .where = .{ .simple = .{ .column = "id", .op = .eq, .value = .{ .integer = 10 } } },
+    };
+
+    const exec = try planner.planSelect(stmt);
+    defer planner.destroyPlan(exec);
+
+    // Should use Filter (with SeqScan as child)
+    try std.testing.expect(exec.* == .filter);
+}
+
+test "planner uses SeqScan for neq condition even with index" {
+    const allocator = std.testing.allocator;
+
+    var catalog = Catalog.init(allocator);
+    defer catalog.deinit();
+
+    const schema = Schema{
+        .columns = &[_]ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+        },
+    };
+    try catalog.createTable("nums", schema);
+
+    const table = catalog.getTable("nums").?;
+    const t1 = Tuple{ .values = &[_]ast.Value{.{ .integer = 10 }} };
+    _ = try table.insert(&t1);
+
+    // Create index
+    try table.createIndex("id");
+
+    var planner = Planner{ .catalog = &catalog, .allocator = allocator };
+
+    // SELECT * FROM nums WHERE id != 10 (neq cannot use index)
+    const stmt = ast.SelectStatement{
+        .columns = &[_][]const u8{"*"},
+        .table_name = "nums",
+        .where = .{ .simple = .{ .column = "id", .op = .neq, .value = .{ .integer = 10 } } },
+    };
+
+    const exec = try planner.planSelect(stmt);
+    defer planner.destroyPlan(exec);
+
+    // Should use Filter (not IndexScan)
+    try std.testing.expect(exec.* == .filter);
 }
