@@ -19,6 +19,7 @@ pub const TokenType = enum {
     string, // 'hello'
     true_lit,
     false_lit,
+    null_lit,
 
     // Operators
     eq, // =

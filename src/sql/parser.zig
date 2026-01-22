@@ -172,12 +172,25 @@ pub const Parser = struct {
             try self.expect(.identifier);
 
             const column_type = try convertTokenToAstColumnType(self.current.type);
-            try columns.append(self.allocator, ast.ColumnDef{
-                .data_type = column_type,
-                .name = column_name,
-                .nullable = false,
-            });
             self.advance();
+
+            var nullable = true;
+            if (self.current.type == TokenType.not_op) {
+                self.advance();
+                if (self.current.type == TokenType.null_lit) {
+                    nullable = false;
+                    self.advance();
+                }
+            } else if (self.current.type == TokenType.null_lit) {
+                nullable = true;
+                self.advance();
+            }
+
+            try columns.append(self.allocator, ast.ColumnDef{
+                .name = column_name,
+                .data_type = column_type,
+                .nullable = nullable,
+            });
         }
         try self.expect(.rparen);
 
@@ -311,6 +324,7 @@ fn convertTokenToAstValue(t: Token) !ast.Value {
         TokenType.string => return ast.Value{ .text = t.lexeme },
         TokenType.true_lit => return ast.Value{ .boolean = true },
         TokenType.false_lit => return ast.Value{ .boolean = false },
+        TokenType.null_lit => return ast.Value{ .null_value = {} },
         else => return error.UnexpectedToken,
     }
 }
@@ -658,4 +672,43 @@ test "parse error on invalid statement" {
 
     const result = parser.parse();
     try std.testing.expectError(error.UnexpectedToken, result);
+}
+
+test "parse CREATE TABLE with nullable column" {
+    const allocator = std.testing.allocator;
+    var parser = Parser.init("CREATE TABLE users (id INT NOT NULL, name TEXT NULL, age INT)", allocator);
+
+    const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
+    const create = stmt.create_table;
+
+    try std.testing.expectEqualStrings("users", create.table_name);
+    try std.testing.expectEqual(@as(usize, 3), create.columns.len);
+
+    // id INT NOT NULL -> nullable = false
+    try std.testing.expectEqualStrings("id", create.columns[0].name);
+    try std.testing.expectEqual(false, create.columns[0].nullable);
+
+    // name TEXT NULL -> nullable = true
+    try std.testing.expectEqualStrings("name", create.columns[1].name);
+    try std.testing.expectEqual(true, create.columns[1].nullable);
+
+    // age INT (no constraint) -> nullable = true (SQL default)
+    try std.testing.expectEqualStrings("age", create.columns[2].name);
+    try std.testing.expectEqual(true, create.columns[2].nullable);
+}
+
+test "parse INSERT with NULL value" {
+    const allocator = std.testing.allocator;
+    var parser = Parser.init("INSERT INTO users VALUES (1, NULL, 'test')", allocator);
+
+    const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
+    const insert = stmt.insert;
+
+    try std.testing.expectEqualStrings("users", insert.table_name);
+    try std.testing.expectEqual(@as(usize, 3), insert.values.len);
+    try std.testing.expectEqual(@as(i64, 1), insert.values[0].integer);
+    try std.testing.expectEqual(ast.Value.null_value, std.meta.activeTag(insert.values[1]));
+    try std.testing.expectEqualStrings("test", insert.values[2].text);
 }

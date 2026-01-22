@@ -154,6 +154,7 @@ const keywords = std.StaticStringMap(TokenType).initComptime(.{
     .{ "bool", .bool_type },
     .{ "true", .true_lit },
     .{ "false", .false_lit },
+    .{ "null", .null_lit },
     .{ "and", .and_op },
     .{ "or", .or_op },
     .{ "not", .not_op },

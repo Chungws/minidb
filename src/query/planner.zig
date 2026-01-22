@@ -18,6 +18,31 @@ pub const Planner = struct {
     catalog: *Catalog,
     allocator: Allocator,
 
+    pub fn destroyPlan(self: *Planner, exec: *Executor) void {
+        switch (exec.*) {
+            .filter => |*f| {
+                self.destroyPlan(f.child);
+            },
+            .project => |*p| {
+                self.allocator.free(p.column_indices); // 여기서 free
+                self.destroyPlan(p.child);
+            },
+            .seq_scan => {},
+        }
+        self.allocator.destroy(exec);
+    }
+
+    pub fn executeInsert(self: *Planner, stmt: ast.InsertStatement) !void {
+        const table = self.catalog.getTable(stmt.table_name) orelse return error.TableNotFound;
+        const t = Tuple{ .values = stmt.values };
+        _ = try table.insert(&t);
+    }
+
+    pub fn executeCreate(self: *Planner, stmt: ast.CreateTableStatement) !void {
+        const schema = Schema{ .columns = stmt.columns };
+        try self.catalog.createTable(stmt.table_name, schema);
+    }
+
     pub fn planSelect(self: *Planner, stmt: ast.SelectStatement) !*Executor {
         const table = self.catalog.getTable(stmt.table_name) orelse return error.TableNotFound;
 
@@ -53,20 +78,6 @@ pub const Planner = struct {
         return exec_ptr;
     }
 
-    pub fn destroyPlan(self: *Planner, exec: *Executor) void {
-        switch (exec.*) {
-            .filter => |*f| {
-                self.destroyPlan(f.child);
-            },
-            .project => |*p| {
-                self.allocator.free(p.column_indices); // 여기서 free
-                self.destroyPlan(p.child);
-            },
-            .seq_scan => {},
-        }
-        self.allocator.destroy(exec);
-    }
-
     fn isSelectAll(columns: []const []const u8) bool {
         for (columns) |col| {
             if (std.mem.eql(u8, col, "*")) {
@@ -91,8 +102,8 @@ pub const Planner = struct {
 
 // ============ Tests ============
 
+const ColumnDef = ast.ColumnDef;
 const tuple = @import("../record/tuple.zig");
-const ColumnDef = tuple.ColumnDef;
 const Tuple = tuple.Tuple;
 
 test "planner select all from table" {
@@ -231,5 +242,87 @@ test "planner table not found" {
     };
 
     const result = planner.planSelect(stmt);
+    try std.testing.expectError(error.TableNotFound, result);
+}
+
+test "executeCreate creates table" {
+    const allocator = std.testing.allocator;
+
+    var catalog = Catalog.init(allocator);
+    defer catalog.deinit();
+
+    var planner = Planner{ .catalog = &catalog, .allocator = allocator };
+
+    const stmt = ast.CreateTableStatement{
+        .table_name = "users",
+        .columns = &[_]ast.ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+            .{ .name = "name", .data_type = .text, .nullable = true },
+        },
+    };
+
+    try planner.executeCreate(stmt);
+
+    const table = catalog.getTable("users");
+    try std.testing.expect(table != null);
+    try std.testing.expectEqualStrings("users", table.?.name);
+    try std.testing.expectEqual(@as(usize, 2), table.?.schema.columns.len);
+}
+
+test "executeInsert inserts row" {
+    const allocator = std.testing.allocator;
+
+    var catalog = Catalog.init(allocator);
+    defer catalog.deinit();
+
+    var planner = Planner{ .catalog = &catalog, .allocator = allocator };
+
+    // Create table first
+    const create_stmt = ast.CreateTableStatement{
+        .table_name = "users",
+        .columns = &[_]ast.ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+            .{ .name = "name", .data_type = .text, .nullable = false },
+        },
+    };
+    try planner.executeCreate(create_stmt);
+
+    // Insert row
+    const insert_stmt = ast.InsertStatement{
+        .table_name = "users",
+        .values = &[_]ast.Value{ .{ .integer = 1 }, .{ .text = "Alice" } },
+    };
+    try planner.executeInsert(insert_stmt);
+
+    // Verify with SELECT
+    const select_stmt = ast.SelectStatement{
+        .columns = &[_][]const u8{"*"},
+        .table_name = "users",
+        .where = null,
+    };
+    const exec = try planner.planSelect(select_stmt);
+    defer planner.destroyPlan(exec);
+
+    var result = (try exec.next()).?;
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(@as(i64, 1), result.values[0].integer);
+    try std.testing.expectEqualStrings("Alice", result.values[1].text);
+}
+
+test "executeInsert table not found" {
+    const allocator = std.testing.allocator;
+
+    var catalog = Catalog.init(allocator);
+    defer catalog.deinit();
+
+    var planner = Planner{ .catalog = &catalog, .allocator = allocator };
+
+    const stmt = ast.InsertStatement{
+        .table_name = "no_such_table",
+        .values = &[_]ast.Value{.{ .integer = 1 }},
+    };
+
+    const result = planner.executeInsert(stmt);
     try std.testing.expectError(error.TableNotFound, result);
 }
