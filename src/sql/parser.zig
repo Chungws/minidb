@@ -112,15 +112,22 @@ pub const Parser = struct {
         const table_name = self.current.lexeme;
         try self.expect(.identifier);
 
+        var join: ?ast.JoinClause = null;
+        if (self.current.type == .join) {
+            try self.expect(.join);
+            join = try self.parseJoinClause();
+        }
+
         var where: ?ast.Condition = null;
         if (self.current.type == TokenType.where) {
-            self.advance();
+            try self.expect(.where);
             where = try self.parseCondition();
         }
 
         return SelectStatement{
             .columns = try columns.toOwnedSlice(self.allocator),
             .table_name = table_name,
+            .join = join,
             .where = where,
         };
     }
@@ -234,6 +241,32 @@ pub const Parser = struct {
             .table_name = table_name,
             .column_name = column_name,
         } };
+    }
+
+    fn parseJoinClause(self: *Parser) !ast.JoinClause {
+        const join_table = self.current.lexeme;
+        try self.expect(.identifier);
+
+        try self.expect(.on);
+
+        try self.expect(.identifier);
+        try self.expect(.dot);
+
+        const left_col = self.current.lexeme;
+        try self.expect(.identifier);
+
+        try self.expect(.eq);
+        try self.expect(.identifier);
+        try self.expect(.dot);
+
+        const right_col = self.current.lexeme;
+        try self.expect(.identifier);
+
+        return ast.JoinClause{
+            .table_name = join_table,
+            .left_column = left_col,
+            .right_column = right_col,
+        };
     }
 
     fn parseCondition(self: *Parser) anyerror!ast.Condition {
@@ -777,4 +810,69 @@ test "parse CREATE INDEX case insensitive" {
     try std.testing.expectEqualStrings("IDX", create_index.index_name);
     try std.testing.expectEqualStrings("USERS", create_index.table_name);
     try std.testing.expectEqualStrings("NAME", create_index.column_name);
+}
+
+test "parse SELECT with JOIN" {
+    const allocator = std.testing.allocator;
+    var parser = Parser.init("SELECT * FROM users JOIN orders ON users.id = orders.user_id", allocator);
+
+    const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
+    const select = stmt.select;
+
+    try std.testing.expectEqualStrings("users", select.table_name);
+    try std.testing.expect(select.join != null);
+
+    const join = select.join.?;
+    try std.testing.expectEqualStrings("orders", join.table_name);
+    try std.testing.expectEqualStrings("id", join.left_column);
+    try std.testing.expectEqualStrings("user_id", join.right_column);
+    try std.testing.expect(select.where == null);
+}
+
+test "parse SELECT with JOIN and WHERE" {
+    const allocator = std.testing.allocator;
+    var parser = Parser.init("SELECT * FROM users JOIN orders ON users.id = orders.user_id WHERE age > 18", allocator);
+
+    const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
+    const select = stmt.select;
+
+    try std.testing.expectEqualStrings("users", select.table_name);
+    try std.testing.expect(select.join != null);
+    try std.testing.expect(select.where != null);
+
+    const join = select.join.?;
+    try std.testing.expectEqualStrings("orders", join.table_name);
+    try std.testing.expectEqualStrings("id", join.left_column);
+    try std.testing.expectEqualStrings("user_id", join.right_column);
+
+    const where = select.where.?;
+    try std.testing.expectEqualStrings("age", where.simple.column);
+    try std.testing.expectEqual(ast.Operator.gt, where.simple.op);
+}
+
+test "parse SELECT with columns and JOIN" {
+    const allocator = std.testing.allocator;
+    var parser = Parser.init("SELECT name, item FROM users JOIN orders ON users.id = orders.user_id", allocator);
+
+    const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
+    const select = stmt.select;
+
+    try std.testing.expectEqual(@as(usize, 2), select.columns.len);
+    try std.testing.expectEqualStrings("name", select.columns[0]);
+    try std.testing.expectEqualStrings("item", select.columns[1]);
+    try std.testing.expect(select.join != null);
+}
+
+test "parse SELECT without JOIN" {
+    const allocator = std.testing.allocator;
+    var parser = Parser.init("SELECT * FROM users", allocator);
+
+    const stmt = try parser.parse();
+    defer parser.freeStatement(stmt);
+    const select = stmt.select;
+
+    try std.testing.expect(select.join == null);
 }

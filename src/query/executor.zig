@@ -10,12 +10,14 @@ const HeapIterator = heap.HeapIterator;
 const RID = heap.RID;
 const ast = @import("../sql/ast.zig");
 const BTree = @import("../index/btree.zig").BTree;
+const Table = @import("../record/table.zig").Table;
 
 pub const Executor = union(enum) {
     seq_scan: SeqScan,
     filter: Filter,
     project: Project,
     index_scan: IndexScan,
+    nested_loop_join: NestedLoopJoin,
 
     pub fn next(self: *Executor) anyerror!?Tuple {
         switch (self.*) {
@@ -23,6 +25,7 @@ pub const Executor = union(enum) {
             .filter => |*ft| return try ft.next(),
             .project => |*pj| return try pj.next(),
             .index_scan => |*is| return try is.next(),
+            .nested_loop_join => |*join| return try join.next(),
         }
     }
 
@@ -37,6 +40,7 @@ pub const Executor = union(enum) {
             .index_scan => |*i| {
                 i.deinit();
             },
+            .nested_loop_join => {},
             .seq_scan => {},
         }
     }
@@ -226,6 +230,101 @@ pub const IndexScan = struct {
             var r = rids;
             r.deinit(self.allocator);
         }
+    }
+};
+
+pub const NestedLoopJoin = struct {
+    left: *Executor,
+    left_schema: Schema,
+    right_table: *const Table,
+    join_column_left: []const u8,
+    join_column_right: []const u8,
+    current_left: ?Tuple,
+    right_iter: ?HeapIterator,
+    merged_columns: ?[]const ast.ColumnDef,
+    allocator: Allocator,
+
+    pub fn init(
+        left: *Executor,
+        left_schema: Schema,
+        right_table: *const Table,
+        join_column_left: []const u8,
+        join_column_right: []const u8,
+        merged_columns: []const ast.ColumnDef,
+        allocator: Allocator,
+    ) NestedLoopJoin {
+        return NestedLoopJoin{
+            .left = left,
+            .left_schema = left_schema,
+            .right_table = right_table,
+            .join_column_left = join_column_left,
+            .join_column_right = join_column_right,
+            .current_left = null,
+            .right_iter = null,
+            .merged_columns = merged_columns,
+            .allocator = allocator,
+        };
+    }
+
+    pub fn next(self: *NestedLoopJoin) !?Tuple {
+        while (true) {
+            if (self.current_left == null) {
+                self.current_left = try self.left.next();
+                if (self.current_left == null) return null;
+
+                self.right_iter = self.right_table.heap_file.scan();
+            }
+
+            if (self.right_iter) |*iter| {
+                while (iter.next()) |right_data| {
+                    var right_tuple = try Tuple.deserialize(right_data.data, self.right_table.schema, self.allocator);
+                    defer right_tuple.deinit(self.allocator);
+
+                    if (self.matchJoin(self.current_left.?, &right_tuple)) {
+                        return try self.mergeTuples(self.current_left.?, right_tuple);
+                    }
+                }
+            }
+
+            if (self.current_left) |*cl| {
+                cl.deinit(self.allocator);
+            }
+            self.current_left = null;
+            self.right_iter = null;
+        }
+    }
+
+    fn matchJoin(self: *const NestedLoopJoin, left: Tuple, right: *Tuple) bool {
+        const left_col_idx = self.left_schema.findColumnIndex(self.join_column_left);
+        const right_col_idx = self.right_table.schema.findColumnIndex(self.join_column_right);
+
+        if (left_col_idx == null or right_col_idx == null) return false;
+
+        const left_val = left.values[left_col_idx.?];
+        const right_val = right.values[right_col_idx.?];
+
+        return left_val.compareValue(right_val, .eq);
+    }
+
+    fn mergeTuples(self: *NestedLoopJoin, left: Tuple, right: Tuple) !Tuple {
+        const total = left.values.len + right.values.len;
+        var merged = try self.allocator.alloc(ast.Value, total);
+
+        for (left.values, 0..) |val, i| {
+            merged[i] = switch (val) {
+                .text => |s| .{ .text = try self.allocator.dupe(u8, s) },
+                else => val,
+            };
+        }
+
+        for (right.values, 0..) |val, i| {
+            merged[left.values.len + i] = switch (val) {
+                .text => |s| .{ .text = try self.allocator.dupe(u8, s) },
+                else => val,
+            };
+        }
+
+        return Tuple{ .values = merged };
     }
 };
 
@@ -869,4 +968,371 @@ test "index_scan available returns false for neq" {
     try std.testing.expect(IndexScan.available(.{ .column = "id", .op = .lt, .value = .{ .integer = 1 } }));
     try std.testing.expect(IndexScan.available(.{ .column = "id", .op = .lte, .value = .{ .integer = 1 } }));
     try std.testing.expect(!IndexScan.available(.{ .column = "id", .op = .neq, .value = .{ .integer = 1 } }));
+}
+
+test "nested_loop_join basic" {
+    const allocator = std.testing.allocator;
+
+    // Left table: users (id, name)
+    var left_heap = try HeapFile.init(allocator);
+    defer left_heap.deinit();
+
+    const left_schema = Schema{
+        .columns = &[_]ast.ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+            .{ .name = "name", .data_type = .text, .nullable = false },
+        },
+    };
+
+    const user1 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 1 }, .{ .text = "Alice" } } };
+    const user2 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 2 }, .{ .text = "Bob" } } };
+    _ = try left_heap.insert(&user1);
+    _ = try left_heap.insert(&user2);
+
+    // Right table: orders (order_id, user_id, item)
+    var right_table = Table{
+        .name = "orders",
+        .schema = Schema{
+            .columns = &[_]ast.ColumnDef{
+                .{ .name = "order_id", .data_type = .integer, .nullable = false },
+                .{ .name = "user_id", .data_type = .integer, .nullable = false },
+                .{ .name = "item", .data_type = .text, .nullable = false },
+            },
+        },
+        .heap_file = try HeapFile.init(allocator),
+        .indexes = std.StringHashMap(*BTree).init(allocator),
+        .allocator = allocator,
+    };
+    defer right_table.heap_file.deinit();
+
+    const o1 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 100 }, .{ .integer = 1 }, .{ .text = "Book" } } };
+    const o2 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 101 }, .{ .integer = 2 }, .{ .text = "Pen" } } };
+    _ = try right_table.heap_file.insert(&o1);
+    _ = try right_table.heap_file.insert(&o2);
+
+    // JOIN: users.id = orders.user_id
+    var left_scan = Executor{ .seq_scan = SeqScan.init(&left_heap, left_schema, allocator) };
+
+    const merged = try allocator.alloc(ast.ColumnDef, left_schema.columns.len + right_table.schema.columns.len);
+    @memcpy(merged[0..left_schema.columns.len], left_schema.columns);
+    @memcpy(merged[left_schema.columns.len..], right_table.schema.columns);
+
+    var join = NestedLoopJoin.init(
+        &left_scan,
+        left_schema,
+        &right_table,
+        "id",
+        "user_id",
+        merged,
+        allocator,
+    );
+    defer allocator.free(merged);
+
+    // First result: Alice's order
+    var result1 = (try join.next()).?;
+    defer result1.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 5), result1.values.len);
+    try std.testing.expectEqual(@as(i64, 1), result1.values[0].integer);
+    try std.testing.expectEqualStrings("Alice", result1.values[1].text);
+    try std.testing.expectEqual(@as(i64, 100), result1.values[2].integer);
+    try std.testing.expectEqualStrings("Book", result1.values[4].text);
+
+    // Second result: Bob's order
+    var result2 = (try join.next()).?;
+    defer result2.deinit(allocator);
+    try std.testing.expectEqual(@as(i64, 2), result2.values[0].integer);
+    try std.testing.expectEqualStrings("Bob", result2.values[1].text);
+    try std.testing.expectEqualStrings("Pen", result2.values[4].text);
+
+    // No more results
+    try std.testing.expect((try join.next()) == null);
+}
+
+test "nested_loop_join no matches" {
+    const allocator = std.testing.allocator;
+
+    // Left table
+    var left_heap = try HeapFile.init(allocator);
+    defer left_heap.deinit();
+
+    const left_schema = Schema{
+        .columns = &[_]ast.ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+        },
+    };
+
+    const user1 = Tuple{ .values = &[_]ast.Value{.{ .integer = 1 }} };
+    _ = try left_heap.insert(&user1);
+
+    // Right table with no matching user_id
+    var right_table = Table{
+        .name = "orders",
+        .schema = Schema{
+            .columns = &[_]ast.ColumnDef{
+                .{ .name = "user_id", .data_type = .integer, .nullable = false },
+            },
+        },
+        .heap_file = try HeapFile.init(allocator),
+        .indexes = std.StringHashMap(*BTree).init(allocator),
+        .allocator = allocator,
+    };
+    defer right_table.heap_file.deinit();
+
+    const o1 = Tuple{ .values = &[_]ast.Value{.{ .integer = 999 }} };
+    _ = try right_table.heap_file.insert(&o1);
+
+    var left_scan = Executor{ .seq_scan = SeqScan.init(&left_heap, left_schema, allocator) };
+
+    const merged = try allocator.alloc(ast.ColumnDef, left_schema.columns.len + right_table.schema.columns.len);
+    @memcpy(merged[0..left_schema.columns.len], left_schema.columns);
+    @memcpy(merged[left_schema.columns.len..], right_table.schema.columns);
+
+    var join = NestedLoopJoin.init(
+        &left_scan,
+        left_schema,
+        &right_table,
+        "id",
+        "user_id",
+        merged,
+        allocator,
+    );
+    defer allocator.free(merged);
+
+    // No matches
+    try std.testing.expect((try join.next()) == null);
+}
+
+test "nested_loop_join one to many" {
+    const allocator = std.testing.allocator;
+
+    // Left table: one user
+    var left_heap = try HeapFile.init(allocator);
+    defer left_heap.deinit();
+
+    const left_schema = Schema{
+        .columns = &[_]ast.ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+        },
+    };
+
+    const user1 = Tuple{ .values = &[_]ast.Value{.{ .integer = 1 }} };
+    _ = try left_heap.insert(&user1);
+
+    // Right table: multiple orders for same user
+    var right_table = Table{
+        .name = "orders",
+        .schema = Schema{
+            .columns = &[_]ast.ColumnDef{
+                .{ .name = "order_id", .data_type = .integer, .nullable = false },
+                .{ .name = "user_id", .data_type = .integer, .nullable = false },
+            },
+        },
+        .heap_file = try HeapFile.init(allocator),
+        .indexes = std.StringHashMap(*BTree).init(allocator),
+        .allocator = allocator,
+    };
+    defer right_table.heap_file.deinit();
+
+    const o1 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 100 }, .{ .integer = 1 } } };
+    const o2 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 101 }, .{ .integer = 1 } } };
+    const o3 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 102 }, .{ .integer = 1 } } };
+    _ = try right_table.heap_file.insert(&o1);
+    _ = try right_table.heap_file.insert(&o2);
+    _ = try right_table.heap_file.insert(&o3);
+
+    var left_scan = Executor{ .seq_scan = SeqScan.init(&left_heap, left_schema, allocator) };
+
+    const merged = try allocator.alloc(ast.ColumnDef, left_schema.columns.len + right_table.schema.columns.len);
+    @memcpy(merged[0..left_schema.columns.len], left_schema.columns);
+    @memcpy(merged[left_schema.columns.len..], right_table.schema.columns);
+
+    var join = NestedLoopJoin.init(
+        &left_scan,
+        left_schema,
+        &right_table,
+        "id",
+        "user_id",
+        merged,
+        allocator,
+    );
+    defer allocator.free(merged);
+
+    // Should return 3 results (1:N)
+    var result1 = (try join.next()).?;
+    defer result1.deinit(allocator);
+    try std.testing.expectEqual(@as(i64, 100), result1.values[1].integer);
+
+    var result2 = (try join.next()).?;
+    defer result2.deinit(allocator);
+    try std.testing.expectEqual(@as(i64, 101), result2.values[1].integer);
+
+    var result3 = (try join.next()).?;
+    defer result3.deinit(allocator);
+    try std.testing.expectEqual(@as(i64, 102), result3.values[1].integer);
+
+    try std.testing.expect((try join.next()) == null);
+}
+
+test "nested_loop_join empty left table" {
+    const allocator = std.testing.allocator;
+
+    // Empty left table
+    var left_heap = try HeapFile.init(allocator);
+    defer left_heap.deinit();
+
+    const left_schema = Schema{
+        .columns = &[_]ast.ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+        },
+    };
+
+    // Right table with data
+    var right_table = Table{
+        .name = "orders",
+        .schema = Schema{
+            .columns = &[_]ast.ColumnDef{
+                .{ .name = "user_id", .data_type = .integer, .nullable = false },
+            },
+        },
+        .heap_file = try HeapFile.init(allocator),
+        .indexes = std.StringHashMap(*BTree).init(allocator),
+        .allocator = allocator,
+    };
+    defer right_table.heap_file.deinit();
+
+    const o1 = Tuple{ .values = &[_]ast.Value{.{ .integer = 1 }} };
+    _ = try right_table.heap_file.insert(&o1);
+
+    var left_scan = Executor{ .seq_scan = SeqScan.init(&left_heap, left_schema, allocator) };
+
+    const merged = try allocator.alloc(ast.ColumnDef, left_schema.columns.len + right_table.schema.columns.len);
+    @memcpy(merged[0..left_schema.columns.len], left_schema.columns);
+    @memcpy(merged[left_schema.columns.len..], right_table.schema.columns);
+
+    var join = NestedLoopJoin.init(
+        &left_scan,
+        left_schema,
+        &right_table,
+        "id",
+        "user_id",
+        merged,
+        allocator,
+    );
+    defer allocator.free(merged);
+
+    // Empty left = no results
+    try std.testing.expect((try join.next()) == null);
+}
+
+test "nested_loop_join empty right table" {
+    const allocator = std.testing.allocator;
+
+    // Left table with data
+    var left_heap = try HeapFile.init(allocator);
+    defer left_heap.deinit();
+
+    const left_schema = Schema{
+        .columns = &[_]ast.ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+        },
+    };
+
+    const user1 = Tuple{ .values = &[_]ast.Value{.{ .integer = 1 }} };
+    _ = try left_heap.insert(&user1);
+
+    // Empty right table
+    var right_table = Table{
+        .name = "orders",
+        .schema = Schema{
+            .columns = &[_]ast.ColumnDef{
+                .{ .name = "user_id", .data_type = .integer, .nullable = false },
+            },
+        },
+        .heap_file = try HeapFile.init(allocator),
+        .indexes = std.StringHashMap(*BTree).init(allocator),
+        .allocator = allocator,
+    };
+    defer right_table.heap_file.deinit();
+
+    var left_scan = Executor{ .seq_scan = SeqScan.init(&left_heap, left_schema, allocator) };
+
+    const merged = try allocator.alloc(ast.ColumnDef, left_schema.columns.len + right_table.schema.columns.len);
+    @memcpy(merged[0..left_schema.columns.len], left_schema.columns);
+    @memcpy(merged[left_schema.columns.len..], right_table.schema.columns);
+
+    var join = NestedLoopJoin.init(
+        &left_scan,
+        left_schema,
+        &right_table,
+        "id",
+        "user_id",
+        merged,
+        allocator,
+    );
+    defer allocator.free(merged);
+
+    // Empty right = no results
+    try std.testing.expect((try join.next()) == null);
+}
+
+test "nested_loop_join with text columns deep copy" {
+    const allocator = std.testing.allocator;
+
+    // Left table with text
+    var left_heap = try HeapFile.init(allocator);
+    defer left_heap.deinit();
+
+    const left_schema = Schema{
+        .columns = &[_]ast.ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+            .{ .name = "name", .data_type = .text, .nullable = false },
+        },
+    };
+
+    const user1 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 1 }, .{ .text = "Alice" } } };
+    _ = try left_heap.insert(&user1);
+
+    // Right table with text
+    var right_table = Table{
+        .name = "orders",
+        .schema = Schema{
+            .columns = &[_]ast.ColumnDef{
+                .{ .name = "user_id", .data_type = .integer, .nullable = false },
+                .{ .name = "item", .data_type = .text, .nullable = false },
+            },
+        },
+        .heap_file = try HeapFile.init(allocator),
+        .indexes = std.StringHashMap(*BTree).init(allocator),
+        .allocator = allocator,
+    };
+    defer right_table.heap_file.deinit();
+
+    const o1 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 1 }, .{ .text = "Laptop" } } };
+    _ = try right_table.heap_file.insert(&o1);
+
+    var left_scan = Executor{ .seq_scan = SeqScan.init(&left_heap, left_schema, allocator) };
+
+    const merged = try allocator.alloc(ast.ColumnDef, left_schema.columns.len + right_table.schema.columns.len);
+    @memcpy(merged[0..left_schema.columns.len], left_schema.columns);
+    @memcpy(merged[left_schema.columns.len..], right_table.schema.columns);
+
+    var join = NestedLoopJoin.init(
+        &left_scan,
+        left_schema,
+        &right_table,
+        "id",
+        "user_id",
+        merged,
+        allocator,
+    );
+    defer allocator.free(merged);
+
+    var result = (try join.next()).?;
+    defer result.deinit(allocator);
+
+    // Verify text values are properly copied
+    try std.testing.expectEqualStrings("Alice", result.values[1].text);
+    try std.testing.expectEqualStrings("Laptop", result.values[3].text);
+
+    try std.testing.expect((try join.next()) == null);
 }

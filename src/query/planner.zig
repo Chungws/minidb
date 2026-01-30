@@ -10,6 +10,7 @@ const SeqScan = executor.SeqScan;
 const Filter = executor.Filter;
 const Project = executor.Project;
 const IndexScan = executor.IndexScan;
+const NestedLoopJoin = executor.NestedLoopJoin;
 
 const PlannerError = error{
     ColumnCountMismatch,
@@ -31,6 +32,12 @@ pub const Planner = struct {
             },
             .index_scan => |*i| {
                 i.deinit();
+            },
+            .nested_loop_join => |*j| {
+                if (j.merged_columns) |cols| {
+                    self.allocator.free(cols);
+                }
+                self.destroyPlan(j.left);
             },
             .seq_scan => {},
         }
@@ -61,13 +68,23 @@ pub const Planner = struct {
     pub fn planSelect(self: *Planner, stmt: ast.SelectStatement) !*Executor {
         const table = self.catalog.getTable(stmt.table_name) orelse return error.TableNotFound;
 
+        var current_schema = table.schema;
+
         var exec_ptr = try self.allocator.create(Executor);
+        errdefer self.allocator.destroy(exec_ptr);
+
         var use_index = false;
         if (stmt.where) |cond| {
             if (cond == .simple and IndexScan.available(cond.simple)) {
                 if (table.indexes.get(cond.simple.column)) |btree| {
                     exec_ptr.* = Executor{
-                        .index_scan = IndexScan.init(btree, &table.heap_file, table.schema, cond.simple, self.allocator),
+                        .index_scan = IndexScan.init(
+                            btree,
+                            &table.heap_file,
+                            current_schema,
+                            cond.simple,
+                            self.allocator,
+                        ),
                     };
                     use_index = true;
                 }
@@ -76,15 +93,47 @@ pub const Planner = struct {
 
         if (!use_index) {
             exec_ptr.* = Executor{
-                .seq_scan = SeqScan.init(&table.heap_file, table.schema, self.allocator),
+                .seq_scan = SeqScan.init(
+                    &table.heap_file,
+                    current_schema,
+                    self.allocator,
+                ),
             };
+        }
+
+        if (stmt.join) |join| {
+            const right_table = self.catalog.getTable(join.table_name) orelse return error.TableNotFound;
+
+            const left_cols = table.schema.columns;
+            const right_cols = right_table.schema.columns;
+            const merged = try self.allocator.alloc(ColumnDef, left_cols.len + right_cols.len);
+            errdefer self.allocator.free(merged);
+
+            @memcpy(merged[0..left_cols.len], left_cols);
+            @memcpy(merged[left_cols.len..], right_cols);
+            current_schema = Schema{ .columns = merged };
+
+            const join_exec = try self.allocator.create(Executor);
+            join_exec.* = Executor{ .nested_loop_join = NestedLoopJoin.init(
+                exec_ptr,
+                table.schema,
+                right_table,
+                join.left_column,
+                join.right_column,
+                merged,
+                self.allocator,
+            ) };
+            exec_ptr = join_exec;
+        }
+
+        if (!use_index) {
             if (stmt.where) |cond| {
                 const filter_ptr = try self.allocator.create(Executor);
                 filter_ptr.* = Executor{
                     .filter = Filter{
                         .child = exec_ptr,
                         .condition = cond,
-                        .schema = table.schema,
+                        .schema = current_schema,
                         .allocator = self.allocator,
                     },
                 };
@@ -93,7 +142,7 @@ pub const Planner = struct {
         }
 
         if (!isSelectAll(stmt.columns)) {
-            const indices = try self.resolveColumns(stmt.columns, table.schema);
+            const indices = try self.resolveColumns(stmt.columns, current_schema);
             const project_ptr = try self.allocator.create(Executor);
             project_ptr.* = Executor{ .project = Project{
                 .child = exec_ptr,
@@ -159,6 +208,7 @@ test "planner select all from table" {
     const stmt = ast.SelectStatement{
         .columns = &[_][]const u8{"*"},
         .table_name = "users",
+        .join = null,
         .where = null,
     };
 
@@ -199,6 +249,7 @@ test "planner select with where clause" {
     const stmt = ast.SelectStatement{
         .columns = &[_][]const u8{"*"},
         .table_name = "nums",
+        .join = null,
         .where = .{ .simple = .{ .column = "id", .op = .gt, .value = .{ .integer = 15 } } },
     };
 
@@ -241,6 +292,7 @@ test "planner select specific columns" {
     const stmt = ast.SelectStatement{
         .columns = &[_][]const u8{ "name", "age" },
         .table_name = "people",
+        .join = null,
         .where = null,
     };
 
@@ -266,6 +318,7 @@ test "planner table not found" {
     const stmt = ast.SelectStatement{
         .columns = &[_][]const u8{"*"},
         .table_name = "no_such_table",
+        .join = null,
         .where = null,
     };
 
@@ -326,6 +379,7 @@ test "executeInsert inserts row" {
     const select_stmt = ast.SelectStatement{
         .columns = &[_][]const u8{"*"},
         .table_name = "users",
+        .join = null,
         .where = null,
     };
     const exec = try planner.planSelect(select_stmt);
@@ -386,6 +440,7 @@ test "planner uses IndexScan when index exists" {
     const stmt = ast.SelectStatement{
         .columns = &[_][]const u8{"*"},
         .table_name = "users",
+        .join = null,
         .where = .{ .simple = .{ .column = "id", .op = .eq, .value = .{ .integer = 20 } } },
     };
 
@@ -428,6 +483,7 @@ test "planner uses SeqScan when no index" {
     const stmt = ast.SelectStatement{
         .columns = &[_][]const u8{"*"},
         .table_name = "nums",
+        .join = null,
         .where = .{ .simple = .{ .column = "id", .op = .eq, .value = .{ .integer = 10 } } },
     };
 
@@ -464,6 +520,7 @@ test "planner uses SeqScan for neq condition even with index" {
     const stmt = ast.SelectStatement{
         .columns = &[_][]const u8{"*"},
         .table_name = "nums",
+        .join = null,
         .where = .{ .simple = .{ .column = "id", .op = .neq, .value = .{ .integer = 10 } } },
     };
 
@@ -517,5 +574,105 @@ test "executeCreateIndex table not found" {
     };
 
     const result = planner.executeCreateIndex(stmt);
+    try std.testing.expectError(error.TableNotFound, result);
+}
+
+test "planner select with join" {
+    const allocator = std.testing.allocator;
+
+    var catalog = Catalog.init(allocator);
+    defer catalog.deinit();
+
+    // Create users table
+    const user_schema = Schema{
+        .columns = &[_]ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+            .{ .name = "name", .data_type = .text, .nullable = false },
+        },
+    };
+    try catalog.createTable("users", user_schema);
+
+    const users = catalog.getTable("users").?;
+    const user1 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 1 }, .{ .text = "Alice" } } };
+    const user2 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 2 }, .{ .text = "Bob" } } };
+    _ = try users.insert(&user1);
+    _ = try users.insert(&user2);
+
+    // Create orders table
+    const order_schema = Schema{
+        .columns = &[_]ColumnDef{
+            .{ .name = "order_id", .data_type = .integer, .nullable = false },
+            .{ .name = "user_id", .data_type = .integer, .nullable = false },
+        },
+    };
+    try catalog.createTable("orders", order_schema);
+
+    const orders = catalog.getTable("orders").?;
+    const o1 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 100 }, .{ .integer = 1 } } };
+    const o2 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 101 }, .{ .integer = 2 } } };
+    _ = try orders.insert(&o1);
+    _ = try orders.insert(&o2);
+
+    var planner = Planner{ .catalog = &catalog, .allocator = allocator };
+
+    // SELECT * FROM users JOIN orders ON users.id = orders.user_id
+    const stmt = ast.SelectStatement{
+        .columns = &[_][]const u8{"*"},
+        .table_name = "users",
+        .join = .{
+            .table_name = "orders",
+            .left_column = "id",
+            .right_column = "user_id",
+        },
+        .where = null,
+    };
+
+    const exec = try planner.planSelect(stmt);
+    defer planner.destroyPlan(exec);
+
+    // Should return merged tuples (4 values each)
+    var result1 = (try exec.next()).?;
+    defer result1.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 4), result1.values.len);
+    try std.testing.expectEqual(@as(i64, 1), result1.values[0].integer);
+    try std.testing.expectEqualStrings("Alice", result1.values[1].text);
+    try std.testing.expectEqual(@as(i64, 100), result1.values[2].integer);
+
+    var result2 = (try exec.next()).?;
+    defer result2.deinit(allocator);
+    try std.testing.expectEqual(@as(i64, 2), result2.values[0].integer);
+    try std.testing.expectEqualStrings("Bob", result2.values[1].text);
+    try std.testing.expectEqual(@as(i64, 101), result2.values[2].integer);
+
+    try std.testing.expect((try exec.next()) == null);
+}
+
+test "planner select with join right table not found" {
+    const allocator = std.testing.allocator;
+
+    var catalog = Catalog.init(allocator);
+    defer catalog.deinit();
+
+    const schema = Schema{
+        .columns = &[_]ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+        },
+    };
+    try catalog.createTable("users", schema);
+
+    var planner = Planner{ .catalog = &catalog, .allocator = allocator };
+
+    const stmt = ast.SelectStatement{
+        .columns = &[_][]const u8{"*"},
+        .table_name = "users",
+        .join = .{
+            .table_name = "no_such_table",
+            .left_column = "id",
+            .right_column = "user_id",
+        },
+        .where = null,
+    };
+
+    const result = planner.planSelect(stmt);
     try std.testing.expectError(error.TableNotFound, result);
 }

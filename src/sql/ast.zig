@@ -16,6 +16,7 @@ pub const Statement = union(enum) {
 pub const SelectStatement = struct {
     columns: []const []const u8,
     table_name: []const u8,
+    join: ?JoinClause,
     where: ?Condition,
 };
 
@@ -39,6 +40,12 @@ pub const ColumnDef = struct {
     name: []const u8,
     data_type: DataType,
     nullable: bool,
+};
+
+pub const JoinClause = struct {
+    table_name: []const u8,
+    left_column: []const u8,
+    right_column: []const u8,
 };
 
 pub const Condition = union(enum) {
@@ -118,3 +125,68 @@ pub const Value = union(enum) {
         };
     }
 };
+
+test "compareValue integer eq" {
+    const a = Value{ .integer = 10 };
+    const b = Value{ .integer = 10 };
+    try std.testing.expect(a.compareValue(b, .eq));
+    try std.testing.expect(!a.compareValue(b, .neq));
+}
+
+test "compareValue integer ordering" {
+    const a = Value{ .integer = 5 };
+    const b = Value{ .integer = 10 };
+    try std.testing.expect(a.compareValue(b, .lt));
+    try std.testing.expect(a.compareValue(b, .lte));
+    try std.testing.expect(!a.compareValue(b, .gt));
+    try std.testing.expect(!a.compareValue(b, .gte));
+    try std.testing.expect(a.compareValue(b, .neq));
+}
+
+test "compareValue text eq" {
+    const a = Value{ .text = "alice" };
+    const b = Value{ .text = "alice" };
+    try std.testing.expect(a.compareValue(b, .eq));
+    try std.testing.expect(!a.compareValue(b, .neq));
+}
+
+test "compareValue text ordering" {
+    const a = Value{ .text = "alice" };
+    const b = Value{ .text = "bob" };
+    try std.testing.expect(a.compareValue(b, .lt));
+    try std.testing.expect(a.compareValue(b, .lte));
+    try std.testing.expect(!a.compareValue(b, .gt));
+    try std.testing.expect(!a.compareValue(b, .gte));
+}
+
+test "compareValue boolean eq" {
+    const a = Value{ .boolean = true };
+    const b = Value{ .boolean = true };
+    const c = Value{ .boolean = false };
+    try std.testing.expect(a.compareValue(b, .eq));
+    try std.testing.expect(!a.compareValue(c, .eq));
+    try std.testing.expect(a.compareValue(c, .neq));
+}
+
+test "compareValue boolean no ordering" {
+    const a = Value{ .boolean = true };
+    const b = Value{ .boolean = false };
+    try std.testing.expect(!a.compareValue(b, .lt));
+    try std.testing.expect(!a.compareValue(b, .gt));
+}
+
+test "compareValue type mismatch returns false" {
+    const int_val = Value{ .integer = 1 };
+    const text_val = Value{ .text = "1" };
+    const bool_val = Value{ .boolean = true };
+    try std.testing.expect(!int_val.compareValue(text_val, .eq));
+    try std.testing.expect(!int_val.compareValue(bool_val, .eq));
+    try std.testing.expect(!text_val.compareValue(bool_val, .eq));
+}
+
+test "compareValue null always false" {
+    const null_val = Value{ .null_value = {} };
+    const int_val = Value{ .integer = 1 };
+    try std.testing.expect(!null_val.compareValue(int_val, .eq));
+    try std.testing.expect(!null_val.compareValue(null_val, .eq));
+}

@@ -33,6 +33,10 @@ pub const Lexer = struct {
                 self.advance();
                 return Token{ .type = TokenType.comma, .lexeme = "," };
             },
+            '.' => {
+                self.advance();
+                return Token{ .type = TokenType.dot, .lexeme = "." };
+            },
             ';' => {
                 self.advance();
                 return Token{ .type = TokenType.semicolon, .lexeme = ";" };
@@ -151,6 +155,7 @@ const keywords = std.StaticStringMap(TokenType).initComptime(.{
     .{ "table", .table },
     .{ "index", .index },
     .{ "on", .on },
+    .{ "join", .join },
     .{ "int", .int_type },
     .{ "text", .text_type },
     .{ "bool", .bool_type },
@@ -374,5 +379,37 @@ test "index and on keywords" {
     try std.testing.expectEqual(TokenType.lparen, lexer.nextToken().type);
     try std.testing.expectEqual(TokenType.identifier, lexer.nextToken().type);
     try std.testing.expectEqual(TokenType.rparen, lexer.nextToken().type);
+    try std.testing.expectEqual(TokenType.eof, lexer.nextToken().type);
+}
+
+test "join keyword" {
+    var lexer = Lexer.init("JOIN orders ON users.id = orders.user_id");
+
+    try std.testing.expectEqual(TokenType.join, lexer.nextToken().type);
+    try std.testing.expectEqual(TokenType.identifier, lexer.nextToken().type);
+    try std.testing.expectEqual(TokenType.on, lexer.nextToken().type);
+    try std.testing.expectEqual(TokenType.identifier, lexer.nextToken().type);
+    try std.testing.expectEqual(TokenType.dot, lexer.nextToken().type);
+    try std.testing.expectEqual(TokenType.identifier, lexer.nextToken().type);
+    try std.testing.expectEqual(TokenType.eq, lexer.nextToken().type);
+    try std.testing.expectEqual(TokenType.identifier, lexer.nextToken().type);
+    try std.testing.expectEqual(TokenType.dot, lexer.nextToken().type);
+    try std.testing.expectEqual(TokenType.identifier, lexer.nextToken().type);
+    try std.testing.expectEqual(TokenType.eof, lexer.nextToken().type);
+}
+
+test "dot token" {
+    var lexer = Lexer.init("users.name");
+
+    const tok1 = lexer.nextToken();
+    try std.testing.expectEqual(TokenType.identifier, tok1.type);
+    try std.testing.expectEqualStrings("users", tok1.lexeme);
+
+    try std.testing.expectEqual(TokenType.dot, lexer.nextToken().type);
+
+    const tok2 = lexer.nextToken();
+    try std.testing.expectEqual(TokenType.identifier, tok2.type);
+    try std.testing.expectEqualStrings("name", tok2.lexeme);
+
     try std.testing.expectEqual(TokenType.eof, lexer.nextToken().type);
 }

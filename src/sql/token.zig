@@ -10,6 +10,7 @@ pub const TokenType = enum {
     table,
     index,
     on,
+    join,
 
     // Types
     int_type, // INT
@@ -42,6 +43,7 @@ pub const TokenType = enum {
     comma, // ,
     semicolon, // ;
     asterisk, // *
+    dot, // .
 
     // Other
     identifier, // 테이블명, 컬럼명
