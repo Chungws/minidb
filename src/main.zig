@@ -333,6 +333,63 @@ test "execute: CREATE INDEX" {
     try std.testing.expect(table.indexes.get("id") != null);
 }
 
+test "execute: SELECT with JOIN" {
+    const allocator = std.testing.allocator;
+
+    var catalog = Catalog.init(allocator);
+    defer catalog.deinit();
+
+    _ = execute(&catalog, "CREATE TABLE users (id INT NOT NULL, name TEXT)", allocator);
+    _ = execute(&catalog, "CREATE TABLE orders (order_id INT NOT NULL, user_id INT NOT NULL)", allocator);
+    _ = execute(&catalog, "INSERT INTO users VALUES (1, 'Alice')", allocator);
+    _ = execute(&catalog, "INSERT INTO users VALUES (2, 'Bob')", allocator);
+    _ = execute(&catalog, "INSERT INTO orders VALUES (100, 1)", allocator);
+    _ = execute(&catalog, "INSERT INTO orders VALUES (101, 2)", allocator);
+    _ = execute(&catalog, "INSERT INTO orders VALUES (102, 1)", allocator);
+
+    var result = execute(&catalog, "SELECT * FROM users JOIN orders ON users.id = orders.user_id", allocator);
+    try std.testing.expect(result == .select);
+
+    var sel = &result.select;
+    defer sel.deinit();
+
+    // Alice has 2 orders, Bob has 1 order = 3 rows total
+    try std.testing.expectEqual(@as(usize, 3), sel.rows.items.len);
+}
+
+test "execute: SELECT with JOIN no matches" {
+    const allocator = std.testing.allocator;
+
+    var catalog = Catalog.init(allocator);
+    defer catalog.deinit();
+
+    _ = execute(&catalog, "CREATE TABLE users (id INT NOT NULL, name TEXT)", allocator);
+    _ = execute(&catalog, "CREATE TABLE orders (order_id INT NOT NULL, user_id INT NOT NULL)", allocator);
+    _ = execute(&catalog, "INSERT INTO users VALUES (1, 'Alice')", allocator);
+    _ = execute(&catalog, "INSERT INTO orders VALUES (100, 999)", allocator);
+
+    var result = execute(&catalog, "SELECT * FROM users JOIN orders ON users.id = orders.user_id", allocator);
+    try std.testing.expect(result == .select);
+
+    var sel = &result.select;
+    defer sel.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), sel.rows.items.len);
+}
+
+test "execute: SELECT with JOIN right table not found" {
+    const allocator = std.testing.allocator;
+
+    var catalog = Catalog.init(allocator);
+    defer catalog.deinit();
+
+    _ = execute(&catalog, "CREATE TABLE users (id INT NOT NULL, name TEXT)", allocator);
+
+    const result = execute(&catalog, "SELECT * FROM users JOIN nonexistent ON users.id = nonexistent.uid", allocator);
+    try std.testing.expect(result == .err);
+    try std.testing.expect(result.err == .execute);
+}
+
 test "execute: SELECT uses index after CREATE INDEX" {
     const allocator = std.testing.allocator;
 
