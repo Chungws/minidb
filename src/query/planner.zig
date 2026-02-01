@@ -3,6 +3,7 @@ const Allocator = std.mem.Allocator;
 
 const ast = @import("../sql/ast.zig");
 const Schema = @import("../record/tuple.zig").Schema;
+const Table = @import("../record/table.zig").Table;
 const Catalog = @import("catalog.zig").Catalog;
 const executor = @import("executor.zig");
 const Executor = executor.Executor;
@@ -53,13 +54,27 @@ pub const Planner = struct {
 
     pub fn planSelect(self: *Planner, stmt: ast.SelectStatement) !*Executor {
         const table = self.catalog.getTable(stmt.table_name) orelse return error.TableNotFound;
-
         var current_schema = table.schema;
 
-        var exec_ptr = try self.allocator.create(Executor);
+        const scan_result = try self.planScan(table, stmt);
+        var exec_ptr = scan_result.exec;
         errdefer self.destroyPlan(exec_ptr);
 
-        var use_index = false;
+        exec_ptr = try self.planJoin(exec_ptr, table, stmt, &current_schema);
+        exec_ptr = try self.planFilter(exec_ptr, stmt, scan_result.use_index);
+        exec_ptr = try self.planProject(exec_ptr, stmt, current_schema);
+
+        return exec_ptr;
+    }
+
+    const ScanResult = struct {
+        exec: *Executor,
+        use_index: bool,
+    };
+
+    fn planScan(self: *Planner, table: *Table, stmt: ast.SelectStatement) !ScanResult {
+        const exec_ptr = try self.allocator.create(Executor);
+
         if (stmt.where) |cond| {
             if (cond == .simple and IndexScan.available(cond.simple)) {
                 if (table.indexes.get(cond.simple.column)) |btree| {
@@ -67,76 +82,84 @@ pub const Planner = struct {
                         .index_scan = IndexScan.init(
                             btree,
                             &table.heap_file,
-                            current_schema,
+                            table.schema,
                             cond.simple,
                             self.allocator,
                         ),
                     };
-                    use_index = true;
+                    return .{ .exec = exec_ptr, .use_index = true };
                 }
             }
         }
 
-        if (!use_index) {
-            exec_ptr.* = Executor{
-                .seq_scan = SeqScan.init(
-                    &table.heap_file,
-                    current_schema,
-                    self.allocator,
-                ),
-            };
-        }
-
-        if (stmt.join) |join| {
-            const right_table = self.catalog.getTable(join.table_name) orelse return error.TableNotFound;
-            const left_col_idx = table.schema.findColumnIndex(join.left_column) orelse return error.ColumnNotFound;
-            const right_col_idx = right_table.schema.findColumnIndex(join.right_column) orelse return error.ColumnNotFound;
-
-            const join_exec = try self.allocator.create(Executor);
-            join_exec.* = Executor{ .nested_loop_join = try NestedLoopJoin.init(
-                exec_ptr,
-                right_table,
-                left_col_idx,
-                right_col_idx,
+        exec_ptr.* = Executor{
+            .seq_scan = SeqScan.init(
+                &table.heap_file,
                 table.schema,
                 self.allocator,
-            ) };
-            current_schema = Schema{ .columns = join_exec.nested_loop_join.merged_columns };
-            exec_ptr = join_exec;
-        }
+            ),
+        };
+        return .{ .exec = exec_ptr, .use_index = false };
+    }
 
-        if (!use_index) {
-            if (stmt.where) |cond| {
-                const filter_ptr = try self.allocator.create(Executor);
-                filter_ptr.* = Executor{
-                    .filter = Filter{
-                        .child = exec_ptr,
-                        .condition = cond,
-                        .allocator = self.allocator,
-                    },
-                };
-                exec_ptr = filter_ptr;
-            }
-        }
+    fn planJoin(self: *Planner, exec_ptr: *Executor, table: *Table, stmt: ast.SelectStatement, current_schema: *Schema) !*Executor {
+        const join = stmt.join orelse return exec_ptr;
 
-        if (!isSelectAll(stmt.columns)) {
-            const indices = try self.resolveColumns(stmt.columns, current_schema);
-            const proj_cols = try self.allocator.alloc(ColumnDef, indices.len);
-            for (indices, 0..) |idx, i| {
-                proj_cols[i] = current_schema.columns[idx];
-            }
+        const right_table = self.catalog.getTable(join.table_name) orelse return error.TableNotFound;
+        const left_col_idx = table.schema.findColumnIndex(join.left_column) orelse return error.ColumnNotFound;
+        const right_col_idx = right_table.schema.findColumnIndex(join.right_column) orelse return error.ColumnNotFound;
 
-            const project_ptr = try self.allocator.create(Executor);
-            project_ptr.* = Executor{ .project = Project{
+        const join_exec = try self.allocator.create(Executor);
+        errdefer self.allocator.destroy(join_exec);
+
+        join_exec.* = Executor{ .nested_loop_join = try NestedLoopJoin.init(
+            exec_ptr,
+            right_table,
+            left_col_idx,
+            right_col_idx,
+            table.schema,
+            self.allocator,
+        ) };
+        current_schema.* = Schema{ .columns = join_exec.nested_loop_join.merged_columns };
+        return join_exec;
+    }
+
+    fn planFilter(self: *Planner, exec_ptr: *Executor, stmt: ast.SelectStatement, use_index: bool) !*Executor {
+        if (use_index) return exec_ptr;
+        const cond = stmt.where orelse return exec_ptr;
+
+        const filter_ptr = try self.allocator.create(Executor);
+        filter_ptr.* = Executor{
+            .filter = Filter{
                 .child = exec_ptr,
-                .column_indices = indices,
-                .projected_schema = Schema{ .columns = proj_cols },
+                .condition = cond,
                 .allocator = self.allocator,
-            } };
-            exec_ptr = project_ptr;
+            },
+        };
+        return filter_ptr;
+    }
+
+    fn planProject(self: *Planner, exec_ptr: *Executor, stmt: ast.SelectStatement, current_schema: Schema) !*Executor {
+        if (isSelectAll(stmt.columns)) return exec_ptr;
+
+        const indices = try self.resolveColumns(stmt.columns, current_schema);
+        errdefer self.allocator.free(indices);
+
+        const proj_cols = try self.allocator.alloc(ColumnDef, indices.len);
+        errdefer self.allocator.free(proj_cols);
+
+        for (indices, 0..) |idx, i| {
+            proj_cols[i] = current_schema.columns[idx];
         }
 
-        return exec_ptr;
+        const project_ptr = try self.allocator.create(Executor);
+        project_ptr.* = Executor{ .project = Project{
+            .child = exec_ptr,
+            .column_indices = indices,
+            .projected_schema = Schema{ .columns = proj_cols },
+            .allocator = self.allocator,
+        } };
+        return project_ptr;
     }
 
     fn isSelectAll(columns: []const []const u8) bool {
