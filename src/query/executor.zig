@@ -77,7 +77,6 @@ pub const SeqScan = struct {
 pub const Filter = struct {
     child: *Executor,
     condition: ast.Condition,
-    schema: Schema,
     allocator: Allocator,
 
     pub fn next(self: *Filter) anyerror!?Tuple {
@@ -94,7 +93,7 @@ pub const Filter = struct {
     pub fn evaluate(self: *Filter, condition: ast.Condition, t: Tuple) bool {
         switch (condition) {
             .simple => |cond| {
-                const val = if (self.schema.findColumnIndex(cond.column)) |idx| t.values[idx] else return false;
+                const val = if (t.schema.findColumnIndex(cond.column)) |idx| t.values[idx] else return false;
                 return val.compareValue(cond.value, cond.op);
             },
             .and_op => |both| {
@@ -236,7 +235,6 @@ pub const IndexScan = struct {
 
 pub const NestedLoopJoin = struct {
     left: *Executor,
-    left_schema: Schema,
     right_table: *const Table,
     join_column_left: []const u8,
     join_column_right: []const u8,
@@ -247,7 +245,6 @@ pub const NestedLoopJoin = struct {
 
     pub fn init(
         left: *Executor,
-        left_schema: Schema,
         right_table: *const Table,
         join_column_left: []const u8,
         join_column_right: []const u8,
@@ -256,7 +253,6 @@ pub const NestedLoopJoin = struct {
     ) NestedLoopJoin {
         return NestedLoopJoin{
             .left = left,
-            .left_schema = left_schema,
             .right_table = right_table,
             .join_column_left = join_column_left,
             .join_column_right = join_column_right,
@@ -296,8 +292,8 @@ pub const NestedLoopJoin = struct {
     }
 
     fn matchJoin(self: *const NestedLoopJoin, left: Tuple, right: *Tuple) bool {
-        const left_col_idx = self.left_schema.findColumnIndex(self.join_column_left);
-        const right_col_idx = self.right_table.schema.findColumnIndex(self.join_column_right);
+        const left_col_idx = left.schema.findColumnIndex(self.join_column_left);
+        const right_col_idx = right.schema.findColumnIndex(self.join_column_right);
 
         if (left_col_idx == null or right_col_idx == null) return false;
 
@@ -502,7 +498,6 @@ test "filter passes matching tuples" {
             .op = .gt,
             .value = .{ .integer = 15 },
         } },
-        .schema = schema,
         .allocator = allocator,
     };
 
@@ -546,7 +541,6 @@ test "filter with no matches returns null" {
             .op = .gt,
             .value = .{ .integer = 100 },
         } },
-        .schema = schema,
         .allocator = allocator,
     };
 
@@ -591,7 +585,6 @@ test "filter with eq operator" {
             .op = .eq,
             .value = .{ .integer = 2 },
         } },
-        .schema = schema,
         .allocator = allocator,
     };
 
@@ -645,7 +638,6 @@ test "filter with and condition" {
     var filter = Filter{
         .child = &child,
         .condition = .{ .and_op = .{ .left = &left_cond, .right = &right_cond } },
-        .schema = schema,
         .allocator = allocator,
     };
 
@@ -699,7 +691,6 @@ test "filter with or condition" {
     var filter = Filter{
         .child = &child,
         .condition = .{ .or_op = .{ .left = &left_cond, .right = &right_cond } },
-        .schema = schema,
         .allocator = allocator,
     };
 
@@ -752,7 +743,6 @@ test "filter with not condition" {
     var filter = Filter{
         .child = &child,
         .condition = .{ .not_op = &inner_cond },
-        .schema = schema,
         .allocator = allocator,
     };
 
@@ -883,7 +873,6 @@ test "project with filter pipeline" {
     var filter = Executor{ .filter = Filter{
         .child = &scan,
         .condition = .{ .simple = .{ .column = "id", .op = .gt, .value = .{ .integer = 1 } } },
-        .schema = schema,
         .allocator = allocator,
     } };
 
@@ -1139,7 +1128,6 @@ test "nested_loop_join basic" {
 
     var join = NestedLoopJoin.init(
         &left_scan,
-        left_schema,
         &right_table,
         "id",
         "user_id",
@@ -1215,7 +1203,6 @@ test "nested_loop_join no matches" {
 
     var join = NestedLoopJoin.init(
         &left_scan,
-        left_schema,
         &right_table,
         "id",
         "user_id",
@@ -1286,7 +1273,6 @@ test "nested_loop_join one to many" {
 
     var join = NestedLoopJoin.init(
         &left_scan,
-        left_schema,
         &right_table,
         "id",
         "user_id",
@@ -1352,7 +1338,6 @@ test "nested_loop_join empty left table" {
 
     var join = NestedLoopJoin.init(
         &left_scan,
-        left_schema,
         &right_table,
         "id",
         "user_id",
@@ -1406,7 +1391,6 @@ test "nested_loop_join empty right table" {
 
     var join = NestedLoopJoin.init(
         &left_scan,
-        left_schema,
         &right_table,
         "id",
         "user_id",
@@ -1468,7 +1452,6 @@ test "nested_loop_join with text columns deep copy" {
 
     var join = NestedLoopJoin.init(
         &left_scan,
-        left_schema,
         &right_table,
         "id",
         "user_id",

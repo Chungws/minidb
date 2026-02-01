@@ -119,7 +119,6 @@ pub const Planner = struct {
             const join_exec = try self.allocator.create(Executor);
             join_exec.* = Executor{ .nested_loop_join = NestedLoopJoin.init(
                 exec_ptr,
-                table.schema,
                 right_table,
                 join.left_column,
                 join.right_column,
@@ -136,7 +135,6 @@ pub const Planner = struct {
                     .filter = Filter{
                         .child = exec_ptr,
                         .condition = cond,
-                        .schema = current_schema,
                         .allocator = self.allocator,
                     },
                 };
