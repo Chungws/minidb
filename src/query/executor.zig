@@ -44,9 +44,7 @@ pub const Executor = union(enum) {
                 i.deinit();
             },
             .nested_loop_join => |*j| {
-                if (j.merged_columns) |cols| {
-                    j.allocator.free(cols);
-                }
+                j.allocator.free(j.merged_columns);
                 j.left.deinit(allocator);
                 j.allocator.destroy(j.left);
             },
@@ -241,7 +239,7 @@ pub const NestedLoopJoin = struct {
     right_col_idx: usize,
     current_left: ?Tuple,
     right_iter: ?HeapIterator,
-    merged_columns: ?[]const ast.ColumnDef,
+    merged_columns: []const ast.ColumnDef,
     allocator: Allocator,
 
     pub fn init(
@@ -249,9 +247,15 @@ pub const NestedLoopJoin = struct {
         right_table: *const Table,
         left_col_idx: usize,
         right_col_idx: usize,
-        merged_columns: []const ast.ColumnDef,
+        left_schema: Schema,
         allocator: Allocator,
-    ) NestedLoopJoin {
+    ) !NestedLoopJoin {
+        const left_cols = left_schema.columns;
+        const right_cols = right_table.schema.columns;
+        const merged = try allocator.alloc(ast.ColumnDef, left_cols.len + right_cols.len);
+        @memcpy(merged[0..left_cols.len], left_cols);
+        @memcpy(merged[left_cols.len..], right_cols);
+
         return NestedLoopJoin{
             .left = left,
             .right_table = right_table,
@@ -259,7 +263,7 @@ pub const NestedLoopJoin = struct {
             .right_col_idx = right_col_idx,
             .current_left = null,
             .right_iter = null,
-            .merged_columns = merged_columns,
+            .merged_columns = merged,
             .allocator = allocator,
         };
     }
@@ -278,7 +282,7 @@ pub const NestedLoopJoin = struct {
                     var right_tuple = try Tuple.deserialize(right_data.data, self.right_table.schema, self.allocator);
                     defer right_tuple.deinit(self.allocator);
 
-                    if (self.matchJoin(self.current_left.?, &right_tuple)) {
+                    if (self.matchJoin(self.current_left.?, right_tuple)) {
                         return try self.mergeTuples(self.current_left.?, right_tuple);
                     }
                 }
@@ -292,7 +296,7 @@ pub const NestedLoopJoin = struct {
         }
     }
 
-    fn matchJoin(self: *const NestedLoopJoin, left: Tuple, right: *Tuple) bool {
+    fn matchJoin(self: *const NestedLoopJoin, left: Tuple, right: Tuple) bool {
         const left_val = left.values[self.left_col_idx];
         const right_val = right.values[self.right_col_idx];
 
@@ -320,7 +324,7 @@ pub const NestedLoopJoin = struct {
         return Tuple{
             .values = merged,
             .schema = Schema{
-                .columns = self.merged_columns.?,
+                .columns = self.merged_columns,
             },
         };
     }
@@ -1118,19 +1122,15 @@ test "nested_loop_join basic" {
     // JOIN: users.id = orders.user_id
     var left_scan = Executor{ .seq_scan = SeqScan.init(&left_heap, left_schema, allocator) };
 
-    const merged = try allocator.alloc(ast.ColumnDef, left_schema.columns.len + right_table.schema.columns.len);
-    @memcpy(merged[0..left_schema.columns.len], left_schema.columns);
-    @memcpy(merged[left_schema.columns.len..], right_table.schema.columns);
-
-    var join = NestedLoopJoin.init(
+    var join = try NestedLoopJoin.init(
         &left_scan,
         &right_table,
         0, // id
         1, // user_id
-        merged,
+        left_schema,
         allocator,
     );
-    defer allocator.free(merged);
+    defer allocator.free(join.merged_columns);
 
     // First result: Alice's order
     var result1 = (try join.next()).?;
@@ -1193,19 +1193,15 @@ test "nested_loop_join no matches" {
 
     var left_scan = Executor{ .seq_scan = SeqScan.init(&left_heap, left_schema, allocator) };
 
-    const merged = try allocator.alloc(ast.ColumnDef, left_schema.columns.len + right_table.schema.columns.len);
-    @memcpy(merged[0..left_schema.columns.len], left_schema.columns);
-    @memcpy(merged[left_schema.columns.len..], right_table.schema.columns);
-
-    var join = NestedLoopJoin.init(
+    var join = try NestedLoopJoin.init(
         &left_scan,
         &right_table,
         0, // id
         0, // user_id
-        merged,
+        left_schema,
         allocator,
     );
-    defer allocator.free(merged);
+    defer allocator.free(join.merged_columns);
 
     // No matches
     try std.testing.expect((try join.next()) == null);
@@ -1263,19 +1259,15 @@ test "nested_loop_join one to many" {
 
     var left_scan = Executor{ .seq_scan = SeqScan.init(&left_heap, left_schema, allocator) };
 
-    const merged = try allocator.alloc(ast.ColumnDef, left_schema.columns.len + right_table.schema.columns.len);
-    @memcpy(merged[0..left_schema.columns.len], left_schema.columns);
-    @memcpy(merged[left_schema.columns.len..], right_table.schema.columns);
-
-    var join = NestedLoopJoin.init(
+    var join = try NestedLoopJoin.init(
         &left_scan,
         &right_table,
         0, // id
         1, // user_id
-        merged,
+        left_schema,
         allocator,
     );
-    defer allocator.free(merged);
+    defer allocator.free(join.merged_columns);
 
     // Should return 3 results (1:N)
     var result1 = (try join.next()).?;
@@ -1328,19 +1320,15 @@ test "nested_loop_join empty left table" {
 
     var left_scan = Executor{ .seq_scan = SeqScan.init(&left_heap, left_schema, allocator) };
 
-    const merged = try allocator.alloc(ast.ColumnDef, left_schema.columns.len + right_table.schema.columns.len);
-    @memcpy(merged[0..left_schema.columns.len], left_schema.columns);
-    @memcpy(merged[left_schema.columns.len..], right_table.schema.columns);
-
-    var join = NestedLoopJoin.init(
+    var join = try NestedLoopJoin.init(
         &left_scan,
         &right_table,
         0, // id
         0, // user_id
-        merged,
+        left_schema,
         allocator,
     );
-    defer allocator.free(merged);
+    defer allocator.free(join.merged_columns);
 
     // Empty left = no results
     try std.testing.expect((try join.next()) == null);
@@ -1381,19 +1369,15 @@ test "nested_loop_join empty right table" {
 
     var left_scan = Executor{ .seq_scan = SeqScan.init(&left_heap, left_schema, allocator) };
 
-    const merged = try allocator.alloc(ast.ColumnDef, left_schema.columns.len + right_table.schema.columns.len);
-    @memcpy(merged[0..left_schema.columns.len], left_schema.columns);
-    @memcpy(merged[left_schema.columns.len..], right_table.schema.columns);
-
-    var join = NestedLoopJoin.init(
+    var join = try NestedLoopJoin.init(
         &left_scan,
         &right_table,
         0, // id
         0, // user_id
-        merged,
+        left_schema,
         allocator,
     );
-    defer allocator.free(merged);
+    defer allocator.free(join.merged_columns);
 
     // Empty right = no results
     try std.testing.expect((try join.next()) == null);
@@ -1442,19 +1426,15 @@ test "nested_loop_join with text columns deep copy" {
 
     var left_scan = Executor{ .seq_scan = SeqScan.init(&left_heap, left_schema, allocator) };
 
-    const merged = try allocator.alloc(ast.ColumnDef, left_schema.columns.len + right_table.schema.columns.len);
-    @memcpy(merged[0..left_schema.columns.len], left_schema.columns);
-    @memcpy(merged[left_schema.columns.len..], right_table.schema.columns);
-
-    var join = NestedLoopJoin.init(
+    var join = try NestedLoopJoin.init(
         &left_scan,
         &right_table,
         0, // id
         0, // user_id
-        merged,
+        left_schema,
         allocator,
     );
-    defer allocator.free(merged);
+    defer allocator.free(join.merged_columns);
 
     var result = (try join.next()).?;
     defer result.deinit(allocator);

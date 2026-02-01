@@ -92,24 +92,16 @@ pub const Planner = struct {
             const left_col_idx = table.schema.findColumnIndex(join.left_column) orelse return error.ColumnNotFound;
             const right_col_idx = right_table.schema.findColumnIndex(join.right_column) orelse return error.ColumnNotFound;
 
-            const left_cols = table.schema.columns;
-            const right_cols = right_table.schema.columns;
-            const merged = try self.allocator.alloc(ColumnDef, left_cols.len + right_cols.len);
-            errdefer self.allocator.free(merged);
-
-            @memcpy(merged[0..left_cols.len], left_cols);
-            @memcpy(merged[left_cols.len..], right_cols);
-            current_schema = Schema{ .columns = merged };
-
             const join_exec = try self.allocator.create(Executor);
-            join_exec.* = Executor{ .nested_loop_join = NestedLoopJoin.init(
+            join_exec.* = Executor{ .nested_loop_join = try NestedLoopJoin.init(
                 exec_ptr,
                 right_table,
                 left_col_idx,
                 right_col_idx,
-                merged,
+                table.schema,
                 self.allocator,
             ) };
+            current_schema = Schema{ .columns = join_exec.nested_loop_join.merged_columns };
             exec_ptr = join_exec;
         }
 
