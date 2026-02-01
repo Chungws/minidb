@@ -14,6 +14,7 @@ const NestedLoopJoin = executor.NestedLoopJoin;
 
 const PlannerError = error{
     ColumnCountMismatch,
+    ColumnNotFound,
     TableNotFound,
 };
 
@@ -88,6 +89,8 @@ pub const Planner = struct {
 
         if (stmt.join) |join| {
             const right_table = self.catalog.getTable(join.table_name) orelse return error.TableNotFound;
+            const left_col_idx = table.schema.findColumnIndex(join.left_column) orelse return error.ColumnNotFound;
+            const right_col_idx = right_table.schema.findColumnIndex(join.right_column) orelse return error.ColumnNotFound;
 
             const left_cols = table.schema.columns;
             const right_cols = right_table.schema.columns;
@@ -102,8 +105,8 @@ pub const Planner = struct {
             join_exec.* = Executor{ .nested_loop_join = NestedLoopJoin.init(
                 exec_ptr,
                 right_table,
-                join.left_column,
-                join.right_column,
+                left_col_idx,
+                right_col_idx,
                 merged,
                 self.allocator,
             ) };
@@ -150,11 +153,10 @@ pub const Planner = struct {
     fn resolveColumns(self: *Planner, columns: []const []const u8, schema: Schema) ![]const usize {
         var indices = try self.allocator.alloc(usize, columns.len);
         for (columns, 0..) |col, i| {
-            for (schema.columns, 0..) |sc, j| {
-                if (std.mem.eql(u8, col, sc.name)) {
-                    indices[i] = j;
-                }
-            }
+            indices[i] = schema.findColumnIndex(col) orelse {
+                self.allocator.free(indices);
+                return error.ColumnNotFound;
+            };
         }
         return indices;
     }

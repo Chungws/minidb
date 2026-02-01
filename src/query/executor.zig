@@ -237,8 +237,8 @@ pub const IndexScan = struct {
 pub const NestedLoopJoin = struct {
     left: *Executor,
     right_table: *const Table,
-    join_column_left: []const u8,
-    join_column_right: []const u8,
+    left_col_idx: usize,
+    right_col_idx: usize,
     current_left: ?Tuple,
     right_iter: ?HeapIterator,
     merged_columns: ?[]const ast.ColumnDef,
@@ -247,16 +247,16 @@ pub const NestedLoopJoin = struct {
     pub fn init(
         left: *Executor,
         right_table: *const Table,
-        join_column_left: []const u8,
-        join_column_right: []const u8,
+        left_col_idx: usize,
+        right_col_idx: usize,
         merged_columns: []const ast.ColumnDef,
         allocator: Allocator,
     ) NestedLoopJoin {
         return NestedLoopJoin{
             .left = left,
             .right_table = right_table,
-            .join_column_left = join_column_left,
-            .join_column_right = join_column_right,
+            .left_col_idx = left_col_idx,
+            .right_col_idx = right_col_idx,
             .current_left = null,
             .right_iter = null,
             .merged_columns = merged_columns,
@@ -293,13 +293,8 @@ pub const NestedLoopJoin = struct {
     }
 
     fn matchJoin(self: *const NestedLoopJoin, left: Tuple, right: *Tuple) bool {
-        const left_col_idx = left.schema.findColumnIndex(self.join_column_left);
-        const right_col_idx = right.schema.findColumnIndex(self.join_column_right);
-
-        if (left_col_idx == null or right_col_idx == null) return false;
-
-        const left_val = left.values[left_col_idx.?];
-        const right_val = right.values[right_col_idx.?];
+        const left_val = left.values[self.left_col_idx];
+        const right_val = right.values[self.right_col_idx];
 
         return left_val.compareValue(right_val, .eq);
     }
@@ -1130,8 +1125,8 @@ test "nested_loop_join basic" {
     var join = NestedLoopJoin.init(
         &left_scan,
         &right_table,
-        "id",
-        "user_id",
+        0, // id
+        1, // user_id
         merged,
         allocator,
     );
@@ -1205,8 +1200,8 @@ test "nested_loop_join no matches" {
     var join = NestedLoopJoin.init(
         &left_scan,
         &right_table,
-        "id",
-        "user_id",
+        0, // id
+        0, // user_id
         merged,
         allocator,
     );
@@ -1275,8 +1270,8 @@ test "nested_loop_join one to many" {
     var join = NestedLoopJoin.init(
         &left_scan,
         &right_table,
-        "id",
-        "user_id",
+        0, // id
+        1, // user_id
         merged,
         allocator,
     );
@@ -1340,8 +1335,8 @@ test "nested_loop_join empty left table" {
     var join = NestedLoopJoin.init(
         &left_scan,
         &right_table,
-        "id",
-        "user_id",
+        0, // id
+        0, // user_id
         merged,
         allocator,
     );
@@ -1393,8 +1388,8 @@ test "nested_loop_join empty right table" {
     var join = NestedLoopJoin.init(
         &left_scan,
         &right_table,
-        "id",
-        "user_id",
+        0, // id
+        0, // user_id
         merged,
         allocator,
     );
@@ -1454,8 +1449,8 @@ test "nested_loop_join with text columns deep copy" {
     var join = NestedLoopJoin.init(
         &left_scan,
         &right_table,
-        "id",
-        "user_id",
+        0, // id
+        0, // user_id
         merged,
         allocator,
     );
