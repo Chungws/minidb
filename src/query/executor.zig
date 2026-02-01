@@ -29,18 +29,27 @@ pub const Executor = union(enum) {
         }
     }
 
-    pub fn deinit(self: *Executor) void {
+    pub fn deinit(self: *Executor, allocator: Allocator) void {
         switch (self.*) {
             .filter => |*f| {
-                f.deinit();
+                f.child.deinit(allocator);
+                allocator.destroy(f.child);
             },
             .project => |*p| {
-                p.deinit();
+                allocator.free(p.column_indices);
+                p.child.deinit(allocator);
+                allocator.destroy(p.child);
             },
             .index_scan => |*i| {
                 i.deinit();
             },
-            .nested_loop_join => {},
+            .nested_loop_join => |*j| {
+                if (j.merged_columns) |cols| {
+                    j.allocator.free(cols);
+                }
+                j.left.deinit(allocator);
+                j.allocator.destroy(j.left);
+            },
             .seq_scan => {},
         }
     }
@@ -107,10 +116,6 @@ pub const Filter = struct {
             },
         }
     }
-
-    pub fn deinit(self: *Filter) void {
-        self.child.deinit();
-    }
 };
 
 pub const Project = struct {
@@ -138,10 +143,6 @@ pub const Project = struct {
             };
         }
         return null;
-    }
-
-    pub fn deinit(self: *Project) void {
-        self.child.deinit();
     }
 };
 

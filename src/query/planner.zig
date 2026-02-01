@@ -22,25 +22,7 @@ pub const Planner = struct {
     allocator: Allocator,
 
     pub fn destroyPlan(self: *Planner, exec: *Executor) void {
-        switch (exec.*) {
-            .filter => |*f| {
-                self.destroyPlan(f.child);
-            },
-            .project => |*p| {
-                self.allocator.free(p.column_indices); // 여기서 free
-                self.destroyPlan(p.child);
-            },
-            .index_scan => |*i| {
-                i.deinit();
-            },
-            .nested_loop_join => |*j| {
-                if (j.merged_columns) |cols| {
-                    self.allocator.free(cols);
-                }
-                self.destroyPlan(j.left);
-            },
-            .seq_scan => {},
-        }
+        exec.deinit(self.allocator);
         self.allocator.destroy(exec);
     }
 
@@ -74,7 +56,7 @@ pub const Planner = struct {
         var current_schema = table.schema;
 
         var exec_ptr = try self.allocator.create(Executor);
-        errdefer self.allocator.destroy(exec_ptr);
+        errdefer self.destroyPlan(exec_ptr);
 
         var use_index = false;
         if (stmt.where) |cond| {
