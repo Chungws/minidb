@@ -121,10 +121,16 @@ pub const Planner = struct {
 
         if (!isSelectAll(stmt.columns)) {
             const indices = try self.resolveColumns(stmt.columns, current_schema);
+            const proj_cols = try self.allocator.alloc(ColumnDef, indices.len);
+            for (indices, 0..) |idx, i| {
+                proj_cols[i] = current_schema.columns[idx];
+            }
+
             const project_ptr = try self.allocator.create(Executor);
             project_ptr.* = Executor{ .project = Project{
                 .child = exec_ptr,
                 .column_indices = indices,
+                .projected_schema = Schema{ .columns = proj_cols },
                 .allocator = self.allocator,
             } };
             exec_ptr = project_ptr;

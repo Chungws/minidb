@@ -37,6 +37,7 @@ pub const Executor = union(enum) {
             },
             .project => |*p| {
                 allocator.free(p.column_indices);
+                allocator.free(p.projected_schema.columns);
                 p.child.deinit(allocator);
                 allocator.destroy(p.child);
             },
@@ -119,6 +120,7 @@ pub const Filter = struct {
 pub const Project = struct {
     child: *Executor,
     column_indices: []const usize,
+    projected_schema: Schema,
     allocator: Allocator,
 
     pub fn next(self: *Project) anyerror!?Tuple {
@@ -137,7 +139,7 @@ pub const Project = struct {
 
             return Tuple{
                 .values = new_values,
-                .schema = tu.schema,
+                .schema = self.projected_schema,
             };
         }
         return null;
@@ -786,6 +788,12 @@ test "project selects specific columns" {
     var project = Project{
         .child = &child,
         .column_indices = &[_]usize{ 0, 1 },
+        .projected_schema = Schema{
+            .columns = &[_]ast.ColumnDef{
+                .{ .name = "id", .data_type = .integer, .nullable = false },
+                .{ .name = "name", .data_type = .text, .nullable = false },
+            },
+        },
         .allocator = allocator,
     };
 
@@ -796,6 +804,11 @@ test "project selects specific columns" {
     try std.testing.expectEqual(@as(usize, 2), result.values.len);
     try std.testing.expectEqual(@as(i64, 1), result.values[0].integer);
     try std.testing.expectEqualStrings("Alice", result.values[1].text);
+
+    // Schema should match projected columns, not original
+    try std.testing.expectEqual(@as(usize, 2), result.schema.columns.len);
+    try std.testing.expectEqualStrings("id", result.schema.columns[0].name);
+    try std.testing.expectEqualStrings("name", result.schema.columns[1].name);
 
     try std.testing.expect((try project.next()) == null);
 }
@@ -826,6 +839,12 @@ test "project reorders columns" {
     var project = Project{
         .child = &child,
         .column_indices = &[_]usize{ 1, 0 },
+        .projected_schema = Schema{
+            .columns = &[_]ast.ColumnDef{
+                .{ .name = "b", .data_type = .integer, .nullable = false },
+                .{ .name = "a", .data_type = .integer, .nullable = false },
+            },
+        },
         .allocator = allocator,
     };
 
@@ -835,6 +854,10 @@ test "project reorders columns" {
     // Should be {20, 10}
     try std.testing.expectEqual(@as(i64, 20), result.values[0].integer);
     try std.testing.expectEqual(@as(i64, 10), result.values[1].integer);
+
+    // Schema should reflect reordered columns
+    try std.testing.expectEqualStrings("b", result.schema.columns[0].name);
+    try std.testing.expectEqualStrings("a", result.schema.columns[1].name);
 }
 
 test "project with filter pipeline" {
@@ -879,6 +902,11 @@ test "project with filter pipeline" {
     var project = Project{
         .child = &filter,
         .column_indices = &[_]usize{1}, // name only
+        .projected_schema = Schema{
+            .columns = &[_]ast.ColumnDef{
+                .{ .name = "name", .data_type = .text, .nullable = false },
+            },
+        },
         .allocator = allocator,
     };
 
@@ -886,6 +914,10 @@ test "project with filter pipeline" {
     var result1 = (try project.next()).?;
     defer result1.deinit(allocator);
     try std.testing.expectEqualStrings("Bob", result1.values[0].text);
+
+    // Schema should have only projected column
+    try std.testing.expectEqual(@as(usize, 1), result1.schema.columns.len);
+    try std.testing.expectEqualStrings("name", result1.schema.columns[0].name);
 
     var result2 = (try project.next()).?;
     defer result2.deinit(allocator);

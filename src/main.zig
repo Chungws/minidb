@@ -377,6 +377,30 @@ test "execute: SELECT with JOIN no matches" {
     try std.testing.expectEqual(@as(usize, 0), sel.rows.items.len);
 }
 
+test "execute: SELECT columns with JOIN" {
+    const allocator = std.testing.allocator;
+
+    var catalog = Catalog.init(allocator);
+    defer catalog.deinit();
+
+    _ = execute(&catalog, "CREATE TABLE users (id INT NOT NULL, name TEXT)", allocator);
+    _ = execute(&catalog, "CREATE TABLE orders (order_id INT NOT NULL, user_id INT NOT NULL)", allocator);
+    _ = execute(&catalog, "INSERT INTO users VALUES (1, 'Alice')", allocator);
+    _ = execute(&catalog, "INSERT INTO orders VALUES (100, 1)", allocator);
+
+    var result = execute(&catalog, "SELECT name, order_id FROM users JOIN orders ON users.id = orders.user_id", allocator);
+    try std.testing.expect(result == .select);
+
+    var sel = &result.select;
+    defer sel.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), sel.rows.items.len);
+    // Should have only 2 projected columns
+    try std.testing.expectEqual(@as(usize, 2), sel.rows.items[0].values.len);
+    try std.testing.expectEqualStrings("Alice", sel.rows.items[0].values[0].text);
+    try std.testing.expectEqual(@as(i64, 100), sel.rows.items[0].values[1].integer);
+}
+
 test "execute: SELECT with JOIN right table not found" {
     const allocator = std.testing.allocator;
 
