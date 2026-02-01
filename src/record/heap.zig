@@ -106,6 +106,7 @@ pub const HeapFile = struct {
 };
 
 // ============ Tests ============
+const Schema = tuple.Schema;
 
 test "heap file init creates one page" {
     const allocator = std.testing.allocator;
@@ -125,6 +126,20 @@ test "heap file insert and get" {
             .{ .integer = 42 },
             .{ .text = "hello" },
         },
+        .schema = Schema{
+            .columns = &[_]ast.ColumnDef{
+                .{
+                    .data_type = .integer,
+                    .name = "number",
+                    .nullable = false,
+                },
+                .{
+                    .data_type = .text,
+                    .name = "string",
+                    .nullable = false,
+                },
+            },
+        },
     };
 
     const rid = try heap.insert(&t);
@@ -141,6 +156,15 @@ test "heap file delete" {
     const t = Tuple{
         .values = &[_]Value{
             .{ .integer = 1 },
+        },
+        .schema = Schema{
+            .columns = &[_]ast.ColumnDef{
+                .{
+                    .data_type = .integer,
+                    .name = "number",
+                    .nullable = false,
+                },
+            },
         },
     };
 
@@ -164,10 +188,28 @@ test "heap file insert multiple tuples" {
     const allocator = std.testing.allocator;
     var heap = try HeapFile.init(allocator);
     defer heap.deinit();
+    const schema = Schema{
+        .columns = &[_]ast.ColumnDef{
+            .{
+                .data_type = .integer,
+                .name = "number",
+                .nullable = false,
+            },
+        },
+    };
 
-    const t1 = Tuple{ .values = &[_]Value{.{ .integer = 1 }} };
-    const t2 = Tuple{ .values = &[_]Value{.{ .integer = 2 }} };
-    const t3 = Tuple{ .values = &[_]Value{.{ .integer = 3 }} };
+    const t1 = Tuple{
+        .values = &[_]Value{.{ .integer = 1 }},
+        .schema = schema,
+    };
+    const t2 = Tuple{
+        .values = &[_]Value{.{ .integer = 2 }},
+        .schema = schema,
+    };
+    const t3 = Tuple{
+        .values = &[_]Value{.{ .integer = 3 }},
+        .schema = schema,
+    };
 
     const rid1 = try heap.insert(&t1);
     const rid2 = try heap.insert(&t2);
@@ -192,10 +234,17 @@ test "heap file creates new page when full" {
     var heap = try HeapFile.init(allocator);
     defer heap.deinit();
 
+    const schema = tuple.Schema{
+        .columns = &[_]ast.ColumnDef{
+            .{ .name = "text", .data_type = .text, .nullable = false },
+        },
+    };
+
     // Create a large tuple that takes most of a page
     const large_text = "x" ** 2000;
     const large_tuple = Tuple{
         .values = &[_]Value{.{ .text = large_text }},
+        .schema = schema,
     };
 
     // First insert goes to page 0
@@ -217,19 +266,6 @@ test "heap file get and deserialize tuple" {
     const allocator = std.testing.allocator;
     var heap = try HeapFile.init(allocator);
     defer heap.deinit();
-
-    const original = Tuple{
-        .values = &[_]Value{
-            .{ .integer = 42 },
-            .{ .text = "hello" },
-            .{ .boolean = true },
-        },
-    };
-
-    const rid = try heap.insert(&original);
-    const data = heap.get(rid).?;
-
-    // Deserialize and verify
     const schema = tuple.Schema{
         .columns = &[_]ast.ColumnDef{
             .{ .name = "id", .data_type = .integer, .nullable = false },
@@ -237,6 +273,20 @@ test "heap file get and deserialize tuple" {
             .{ .name = "active", .data_type = .boolean, .nullable = false },
         },
     };
+
+    const original = Tuple{
+        .values = &[_]Value{
+            .{ .integer = 42 },
+            .{ .text = "hello" },
+            .{ .boolean = true },
+        },
+        .schema = schema,
+    };
+
+    const rid = try heap.insert(&original);
+    const data = heap.get(rid).?;
+
+    // Deserialize and verify
 
     var deserialized = try Tuple.deserialize(data, schema, allocator);
     defer deserialized.deinit(allocator);
@@ -261,9 +311,24 @@ test "heap file RID stability after other deletes" {
     var heap = try HeapFile.init(allocator);
     defer heap.deinit();
 
-    const t1 = Tuple{ .values = &[_]Value{.{ .integer = 100 }} };
-    const t2 = Tuple{ .values = &[_]Value{.{ .integer = 200 }} };
-    const t3 = Tuple{ .values = &[_]Value{.{ .integer = 300 }} };
+    const schema = tuple.Schema{
+        .columns = &[_]ast.ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+        },
+    };
+
+    const t1 = Tuple{
+        .values = &[_]Value{.{ .integer = 100 }},
+        .schema = schema,
+    };
+    const t2 = Tuple{
+        .values = &[_]Value{.{ .integer = 200 }},
+        .schema = schema,
+    };
+    const t3 = Tuple{
+        .values = &[_]Value{.{ .integer = 300 }},
+        .schema = schema,
+    };
 
     const rid1 = try heap.insert(&t1);
     const rid2 = try heap.insert(&t2);
@@ -283,9 +348,24 @@ test "heap iterator scans all tuples" {
     var heap = try HeapFile.init(allocator);
     defer heap.deinit();
 
-    const t1 = Tuple{ .values = &[_]Value{.{ .integer = 1 }} };
-    const t2 = Tuple{ .values = &[_]Value{.{ .integer = 2 }} };
-    const t3 = Tuple{ .values = &[_]Value{.{ .integer = 3 }} };
+    const schema = tuple.Schema{
+        .columns = &[_]ast.ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+        },
+    };
+
+    const t1 = Tuple{
+        .values = &[_]Value{.{ .integer = 1 }},
+        .schema = schema,
+    };
+    const t2 = Tuple{
+        .values = &[_]Value{.{ .integer = 2 }},
+        .schema = schema,
+    };
+    const t3 = Tuple{
+        .values = &[_]Value{.{ .integer = 3 }},
+        .schema = schema,
+    };
 
     _ = try heap.insert(&t1);
     _ = try heap.insert(&t2);
@@ -305,9 +385,24 @@ test "heap iterator skips deleted tuples" {
     var heap = try HeapFile.init(allocator);
     defer heap.deinit();
 
-    const t1 = Tuple{ .values = &[_]Value{.{ .integer = 1 }} };
-    const t2 = Tuple{ .values = &[_]Value{.{ .integer = 2 }} };
-    const t3 = Tuple{ .values = &[_]Value{.{ .integer = 3 }} };
+    const schema = tuple.Schema{
+        .columns = &[_]ast.ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+        },
+    };
+
+    const t1 = Tuple{
+        .values = &[_]Value{.{ .integer = 1 }},
+        .schema = schema,
+    };
+    const t2 = Tuple{
+        .values = &[_]Value{.{ .integer = 2 }},
+        .schema = schema,
+    };
+    const t3 = Tuple{
+        .values = &[_]Value{.{ .integer = 3 }},
+        .schema = schema,
+    };
 
     _ = try heap.insert(&t1);
     const rid2 = try heap.insert(&t2);
@@ -329,7 +424,15 @@ test "heap iterator returns correct RIDs" {
     var heap = try HeapFile.init(allocator);
     defer heap.deinit();
 
-    const t = Tuple{ .values = &[_]Value{.{ .integer = 42 }} };
+    const schema = tuple.Schema{
+        .columns = &[_]ast.ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+        },
+    };
+    const t = Tuple{
+        .values = &[_]Value{.{ .integer = 42 }},
+        .schema = schema,
+    };
 
     const rid1 = try heap.insert(&t);
     const rid2 = try heap.insert(&t);
@@ -361,10 +464,16 @@ test "insert reuses space in earlier pages after delete" {
     var heap = try HeapFile.init(allocator);
     defer heap.deinit();
 
+    const schema = tuple.Schema{
+        .columns = &[_]ast.ColumnDef{
+            .{ .name = "text", .data_type = .text, .nullable = false },
+        },
+    };
     // Fill page 0 with large tuples
     const large_text = "x" ** 2000;
     const large_tuple = Tuple{
         .values = &[_]Value{.{ .text = large_text }},
+        .schema = schema,
     };
 
     const rid1 = try heap.insert(&large_tuple); // page 0

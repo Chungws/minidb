@@ -123,6 +123,7 @@ test "table insert and get" {
             .{ .integer = 42 },
             .{ .text = "alice" },
         },
+        .schema = schema,
     };
 
     const rid = try table.insert(&t);
@@ -143,7 +144,10 @@ test "table delete" {
     var table = try Table.init("test", schema, allocator);
     defer table.deinit();
 
-    const t = Tuple{ .values = &[_]Value{.{ .integer = 1 }} };
+    const t = Tuple{
+        .values = &[_]Value{.{ .integer = 1 }},
+        .schema = schema,
+    };
     const rid = try table.insert(&t);
 
     table.delete(rid);
@@ -164,9 +168,18 @@ test "table createIndex and search" {
     defer table.deinit();
 
     // Insert data first
-    const t1 = Tuple{ .values = &[_]Value{ .{ .integer = 10 }, .{ .text = "Alice" } } };
-    const t2 = Tuple{ .values = &[_]Value{ .{ .integer = 20 }, .{ .text = "Bob" } } };
-    const t3 = Tuple{ .values = &[_]Value{ .{ .integer = 30 }, .{ .text = "Charlie" } } };
+    const t1 = Tuple{
+        .values = &[_]Value{ .{ .integer = 10 }, .{ .text = "Alice" } },
+        .schema = schema,
+    };
+    const t2 = Tuple{
+        .values = &[_]Value{ .{ .integer = 20 }, .{ .text = "Bob" } },
+        .schema = schema,
+    };
+    const t3 = Tuple{
+        .values = &[_]Value{ .{ .integer = 30 }, .{ .text = "Charlie" } },
+        .schema = schema,
+    };
     _ = try table.insert(&t1);
     _ = try table.insert(&t2);
     _ = try table.insert(&t3);
@@ -203,7 +216,10 @@ test "table insert updates index" {
     try table.createIndex("id");
 
     // Insert after index creation
-    const t1 = Tuple{ .values = &[_]Value{.{ .integer = 100 }} };
+    const t1 = Tuple{
+        .values = &[_]Value{.{ .integer = 100 }},
+        .schema = schema,
+    };
     _ = try table.insert(&t1);
 
     // Index should be updated

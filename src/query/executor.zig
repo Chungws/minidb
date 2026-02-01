@@ -135,6 +135,7 @@ pub const Project = struct {
 
             return Tuple{
                 .values = new_values,
+                .schema = tu.schema,
             };
         }
         return null;
@@ -324,7 +325,12 @@ pub const NestedLoopJoin = struct {
             };
         }
 
-        return Tuple{ .values = merged };
+        return Tuple{
+            .values = merged,
+            .schema = Schema{
+                .columns = self.merged_columns.?,
+            },
+        };
     }
 };
 
@@ -361,9 +367,18 @@ test "seq_scan returns all tuples" {
     };
 
     // Insert 3 tuples
-    const t1 = Tuple{ .values = &[_]ast.Value{.{ .integer = 10 }} };
-    const t2 = Tuple{ .values = &[_]ast.Value{.{ .integer = 20 }} };
-    const t3 = Tuple{ .values = &[_]ast.Value{.{ .integer = 30 }} };
+    const t1 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 10 }},
+        .schema = schema,
+    };
+    const t2 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 20 }},
+        .schema = schema,
+    };
+    const t3 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 30 }},
+        .schema = schema,
+    };
     _ = try heap_file.insert(&t1);
     _ = try heap_file.insert(&t2);
     _ = try heap_file.insert(&t3);
@@ -399,7 +414,10 @@ test "seq_scan reset restarts scan" {
         },
     };
 
-    const t1 = Tuple{ .values = &[_]ast.Value{.{ .integer = 100 }} };
+    const t1 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 100 }},
+        .schema = schema,
+    };
     _ = try heap_file.insert(&t1);
 
     var scan = SeqScan.init(&heap_file, schema, allocator);
@@ -430,7 +448,10 @@ test "executor with seq_scan" {
         },
     };
 
-    const t = Tuple{ .values = &[_]ast.Value{.{ .integer = 42 }} };
+    const t = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 42 }},
+        .schema = schema,
+    };
     _ = try heap_file.insert(&t);
 
     var executor = Executor{ .seq_scan = SeqScan.init(&heap_file, schema, allocator) };
@@ -455,9 +476,18 @@ test "filter passes matching tuples" {
     };
 
     // Insert tuples: 10, 20, 30
-    const t1 = Tuple{ .values = &[_]ast.Value{.{ .integer = 10 }} };
-    const t2 = Tuple{ .values = &[_]ast.Value{.{ .integer = 20 }} };
-    const t3 = Tuple{ .values = &[_]ast.Value{.{ .integer = 30 }} };
+    const t1 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 10 }},
+        .schema = schema,
+    };
+    const t2 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 20 }},
+        .schema = schema,
+    };
+    const t3 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 30 }},
+        .schema = schema,
+    };
     _ = try heap_file.insert(&t1);
     _ = try heap_file.insert(&t2);
     _ = try heap_file.insert(&t3);
@@ -500,7 +530,10 @@ test "filter with no matches returns null" {
         },
     };
 
-    const t1 = Tuple{ .values = &[_]ast.Value{.{ .integer = 10 }} };
+    const t1 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 10 }},
+        .schema = schema,
+    };
     _ = try heap_file.insert(&t1);
 
     var child = Executor{ .seq_scan = SeqScan.init(&heap_file, schema, allocator) };
@@ -532,9 +565,18 @@ test "filter with eq operator" {
         },
     };
 
-    const t1 = Tuple{ .values = &[_]ast.Value{.{ .integer = 1 }} };
-    const t2 = Tuple{ .values = &[_]ast.Value{.{ .integer = 2 }} };
-    const t3 = Tuple{ .values = &[_]ast.Value{.{ .integer = 3 }} };
+    const t1 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 1 }},
+        .schema = schema,
+    };
+    const t2 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 2 }},
+        .schema = schema,
+    };
+    const t3 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 3 }},
+        .schema = schema,
+    };
     _ = try heap_file.insert(&t1);
     _ = try heap_file.insert(&t2);
     _ = try heap_file.insert(&t3);
@@ -573,10 +615,22 @@ test "filter with and condition" {
     };
 
     // Insert tuples: 10, 20, 30, 40
-    const t1 = Tuple{ .values = &[_]ast.Value{.{ .integer = 10 }} };
-    const t2 = Tuple{ .values = &[_]ast.Value{.{ .integer = 20 }} };
-    const t3 = Tuple{ .values = &[_]ast.Value{.{ .integer = 30 }} };
-    const t4 = Tuple{ .values = &[_]ast.Value{.{ .integer = 40 }} };
+    const t1 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 10 }},
+        .schema = schema,
+    };
+    const t2 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 20 }},
+        .schema = schema,
+    };
+    const t3 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 30 }},
+        .schema = schema,
+    };
+    const t4 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 40 }},
+        .schema = schema,
+    };
     _ = try heap_file.insert(&t1);
     _ = try heap_file.insert(&t2);
     _ = try heap_file.insert(&t3);
@@ -620,9 +674,18 @@ test "filter with or condition" {
     };
 
     // Insert tuples: 1, 2, 3
-    const t1 = Tuple{ .values = &[_]ast.Value{.{ .integer = 1 }} };
-    const t2 = Tuple{ .values = &[_]ast.Value{.{ .integer = 2 }} };
-    const t3 = Tuple{ .values = &[_]ast.Value{.{ .integer = 3 }} };
+    const t1 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 1 }},
+        .schema = schema,
+    };
+    const t2 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 2 }},
+        .schema = schema,
+    };
+    const t3 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 3 }},
+        .schema = schema,
+    };
     _ = try heap_file.insert(&t1);
     _ = try heap_file.insert(&t2);
     _ = try heap_file.insert(&t3);
@@ -665,9 +728,18 @@ test "filter with not condition" {
     };
 
     // Insert tuples: 1, 2, 3
-    const t1 = Tuple{ .values = &[_]ast.Value{.{ .integer = 1 }} };
-    const t2 = Tuple{ .values = &[_]ast.Value{.{ .integer = 2 }} };
-    const t3 = Tuple{ .values = &[_]ast.Value{.{ .integer = 3 }} };
+    const t1 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 1 }},
+        .schema = schema,
+    };
+    const t2 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 2 }},
+        .schema = schema,
+    };
+    const t3 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 3 }},
+        .schema = schema,
+    };
     _ = try heap_file.insert(&t1);
     _ = try heap_file.insert(&t2);
     _ = try heap_file.insert(&t3);
@@ -715,7 +787,7 @@ test "project selects specific columns" {
         .{ .integer = 1 },
         .{ .text = "Alice" },
         .{ .integer = 20 },
-    } };
+    }, .schema = schema };
     _ = try heap_file.insert(&t1);
 
     var child = Executor{ .seq_scan = SeqScan.init(&heap_file, schema, allocator) };
@@ -755,7 +827,7 @@ test "project reorders columns" {
     const t1 = Tuple{ .values = &[_]ast.Value{
         .{ .integer = 10 },
         .{ .integer = 20 },
-    } };
+    }, .schema = schema };
     _ = try heap_file.insert(&t1);
 
     var child = Executor{ .seq_scan = SeqScan.init(&heap_file, schema, allocator) };
@@ -789,9 +861,18 @@ test "project with filter pipeline" {
     };
 
     // Insert tuples
-    const t1 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 1 }, .{ .text = "Alice" } } };
-    const t2 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 2 }, .{ .text = "Bob" } } };
-    const t3 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 3 }, .{ .text = "Charlie" } } };
+    const t1 = Tuple{
+        .values = &[_]ast.Value{ .{ .integer = 1 }, .{ .text = "Alice" } },
+        .schema = schema,
+    };
+    const t2 = Tuple{
+        .values = &[_]ast.Value{ .{ .integer = 2 }, .{ .text = "Bob" } },
+        .schema = schema,
+    };
+    const t3 = Tuple{
+        .values = &[_]ast.Value{ .{ .integer = 3 }, .{ .text = "Charlie" } },
+        .schema = schema,
+    };
     _ = try heap_file.insert(&t1);
     _ = try heap_file.insert(&t2);
     _ = try heap_file.insert(&t3);
@@ -838,9 +919,18 @@ test "index_scan with eq condition" {
     };
 
     // Insert tuples
-    const t1 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 10 }, .{ .text = "Alice" } } };
-    const t2 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 20 }, .{ .text = "Bob" } } };
-    const t3 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 30 }, .{ .text = "Charlie" } } };
+    const t1 = Tuple{
+        .values = &[_]ast.Value{ .{ .integer = 10 }, .{ .text = "Alice" } },
+        .schema = schema,
+    };
+    const t2 = Tuple{
+        .values = &[_]ast.Value{ .{ .integer = 20 }, .{ .text = "Bob" } },
+        .schema = schema,
+    };
+    const t3 = Tuple{
+        .values = &[_]ast.Value{ .{ .integer = 30 }, .{ .text = "Charlie" } },
+        .schema = schema,
+    };
     const rid1 = try heap_file.insert(&t1);
     const rid2 = try heap_file.insert(&t2);
     const rid3 = try heap_file.insert(&t3);
@@ -882,9 +972,18 @@ test "index_scan with range condition gte" {
     };
 
     // Insert tuples
-    const t1 = Tuple{ .values = &[_]ast.Value{.{ .integer = 10 }} };
-    const t2 = Tuple{ .values = &[_]ast.Value{.{ .integer = 20 }} };
-    const t3 = Tuple{ .values = &[_]ast.Value{.{ .integer = 30 }} };
+    const t1 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 10 }},
+        .schema = schema,
+    };
+    const t2 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 20 }},
+        .schema = schema,
+    };
+    const t3 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 30 }},
+        .schema = schema,
+    };
     const rid1 = try heap_file.insert(&t1);
     const rid2 = try heap_file.insert(&t2);
     const rid3 = try heap_file.insert(&t3);
@@ -928,9 +1027,18 @@ test "index_scan with range condition lte" {
     };
 
     // Insert tuples
-    const t1 = Tuple{ .values = &[_]ast.Value{.{ .integer = 10 }} };
-    const t2 = Tuple{ .values = &[_]ast.Value{.{ .integer = 20 }} };
-    const t3 = Tuple{ .values = &[_]ast.Value{.{ .integer = 30 }} };
+    const t1 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 10 }},
+        .schema = schema,
+    };
+    const t2 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 20 }},
+        .schema = schema,
+    };
+    const t3 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 30 }},
+        .schema = schema,
+    };
     const rid1 = try heap_file.insert(&t1);
     const rid2 = try heap_file.insert(&t2);
     const rid3 = try heap_file.insert(&t3);
@@ -984,8 +1092,14 @@ test "nested_loop_join basic" {
         },
     };
 
-    const user1 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 1 }, .{ .text = "Alice" } } };
-    const user2 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 2 }, .{ .text = "Bob" } } };
+    const user1 = Tuple{
+        .values = &[_]ast.Value{ .{ .integer = 1 }, .{ .text = "Alice" } },
+        .schema = left_schema,
+    };
+    const user2 = Tuple{
+        .values = &[_]ast.Value{ .{ .integer = 2 }, .{ .text = "Bob" } },
+        .schema = left_schema,
+    };
     _ = try left_heap.insert(&user1);
     _ = try left_heap.insert(&user2);
 
@@ -1005,8 +1119,14 @@ test "nested_loop_join basic" {
     };
     defer right_table.heap_file.deinit();
 
-    const o1 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 100 }, .{ .integer = 1 }, .{ .text = "Book" } } };
-    const o2 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 101 }, .{ .integer = 2 }, .{ .text = "Pen" } } };
+    const o1 = Tuple{
+        .values = &[_]ast.Value{ .{ .integer = 100 }, .{ .integer = 1 }, .{ .text = "Book" } },
+        .schema = right_table.schema,
+    };
+    const o2 = Tuple{
+        .values = &[_]ast.Value{ .{ .integer = 101 }, .{ .integer = 2 }, .{ .text = "Pen" } },
+        .schema = right_table.schema,
+    };
     _ = try right_table.heap_file.insert(&o1);
     _ = try right_table.heap_file.insert(&o2);
 
@@ -1061,7 +1181,10 @@ test "nested_loop_join no matches" {
         },
     };
 
-    const user1 = Tuple{ .values = &[_]ast.Value{.{ .integer = 1 }} };
+    const user1 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 1 }},
+        .schema = left_schema,
+    };
     _ = try left_heap.insert(&user1);
 
     // Right table with no matching user_id
@@ -1078,7 +1201,10 @@ test "nested_loop_join no matches" {
     };
     defer right_table.heap_file.deinit();
 
-    const o1 = Tuple{ .values = &[_]ast.Value{.{ .integer = 999 }} };
+    const o1 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 999 }},
+        .schema = right_table.schema,
+    };
     _ = try right_table.heap_file.insert(&o1);
 
     var left_scan = Executor{ .seq_scan = SeqScan.init(&left_heap, left_schema, allocator) };
@@ -1115,7 +1241,10 @@ test "nested_loop_join one to many" {
         },
     };
 
-    const user1 = Tuple{ .values = &[_]ast.Value{.{ .integer = 1 }} };
+    const user1 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 1 }},
+        .schema = left_schema,
+    };
     _ = try left_heap.insert(&user1);
 
     // Right table: multiple orders for same user
@@ -1133,9 +1262,18 @@ test "nested_loop_join one to many" {
     };
     defer right_table.heap_file.deinit();
 
-    const o1 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 100 }, .{ .integer = 1 } } };
-    const o2 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 101 }, .{ .integer = 1 } } };
-    const o3 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 102 }, .{ .integer = 1 } } };
+    const o1 = Tuple{
+        .values = &[_]ast.Value{ .{ .integer = 100 }, .{ .integer = 1 } },
+        .schema = right_table.schema,
+    };
+    const o2 = Tuple{
+        .values = &[_]ast.Value{ .{ .integer = 101 }, .{ .integer = 1 } },
+        .schema = right_table.schema,
+    };
+    const o3 = Tuple{
+        .values = &[_]ast.Value{ .{ .integer = 102 }, .{ .integer = 1 } },
+        .schema = right_table.schema,
+    };
     _ = try right_table.heap_file.insert(&o1);
     _ = try right_table.heap_file.insert(&o2);
     _ = try right_table.heap_file.insert(&o3);
@@ -1200,7 +1338,10 @@ test "nested_loop_join empty left table" {
     };
     defer right_table.heap_file.deinit();
 
-    const o1 = Tuple{ .values = &[_]ast.Value{.{ .integer = 1 }} };
+    const o1 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 1 }},
+        .schema = left_schema,
+    };
     _ = try right_table.heap_file.insert(&o1);
 
     var left_scan = Executor{ .seq_scan = SeqScan.init(&left_heap, left_schema, allocator) };
@@ -1237,7 +1378,10 @@ test "nested_loop_join empty right table" {
         },
     };
 
-    const user1 = Tuple{ .values = &[_]ast.Value{.{ .integer = 1 }} };
+    const user1 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 1 }},
+        .schema = left_schema,
+    };
     _ = try left_heap.insert(&user1);
 
     // Empty right table
@@ -1289,7 +1433,10 @@ test "nested_loop_join with text columns deep copy" {
         },
     };
 
-    const user1 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 1 }, .{ .text = "Alice" } } };
+    const user1 = Tuple{
+        .values = &[_]ast.Value{ .{ .integer = 1 }, .{ .text = "Alice" } },
+        .schema = left_schema,
+    };
     _ = try left_heap.insert(&user1);
 
     // Right table with text
@@ -1307,7 +1454,10 @@ test "nested_loop_join with text columns deep copy" {
     };
     defer right_table.heap_file.deinit();
 
-    const o1 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 1 }, .{ .text = "Laptop" } } };
+    const o1 = Tuple{
+        .values = &[_]ast.Value{ .{ .integer = 1 }, .{ .text = "Laptop" } },
+        .schema = right_table.schema,
+    };
     _ = try right_table.heap_file.insert(&o1);
 
     var left_scan = Executor{ .seq_scan = SeqScan.init(&left_heap, left_schema, allocator) };

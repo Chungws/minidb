@@ -30,6 +30,7 @@ pub const Schema = struct {
 
 pub const Tuple = struct {
     values: []const Value,
+    schema: Schema,
 
     pub fn serialize(self: *const Tuple, allocator: Allocator) ![]u8 {
         const bitmap_size = (self.values.len + 7) / 8;
@@ -102,6 +103,7 @@ pub const Tuple = struct {
         }
         return Tuple{
             .values = try values.toOwnedSlice(allocator),
+            .schema = schema,
         };
     }
 
@@ -158,6 +160,7 @@ test "serialize and deserialize simple tuple (INT, TEXT, BOOL)" {
             .{ .text = "alice" },
             .{ .boolean = true },
         },
+        .schema = schema,
     };
 
     const bytes = try tuple.serialize(allocator);
@@ -188,6 +191,7 @@ test "serialize and deserialize tuple with NULL values" {
             .{ .null_value = {} },
             .{ .null_value = {} },
         },
+        .schema = schema,
     };
 
     const bytes = try tuple.serialize(allocator);
@@ -214,6 +218,7 @@ test "serialize and deserialize tuple with empty string" {
         .values = &[_]Value{
             .{ .text = "" },
         },
+        .schema = schema,
     };
 
     const bytes = try tuple.serialize(allocator);
@@ -240,6 +245,7 @@ test "serialize and deserialize tuple with long string" {
         .values = &[_]Value{
             .{ .text = long_text },
         },
+        .schema = schema,
     };
 
     const bytes = try tuple.serialize(allocator);
@@ -265,6 +271,7 @@ test "serialize and deserialize tuple with negative integer" {
         .values = &[_]Value{
             .{ .integer = -12345 },
         },
+        .schema = schema,
     };
 
     const bytes = try tuple.serialize(allocator);
@@ -289,6 +296,7 @@ test "serialize and deserialize tuple with false boolean" {
         .values = &[_]Value{
             .{ .boolean = false },
         },
+        .schema = schema,
     };
 
     const bytes = try tuple.serialize(allocator);
@@ -317,6 +325,7 @@ test "serialize and deserialize tuple with all NULL values" {
             .{ .null_value = {} },
             .{ .null_value = {} },
         },
+        .schema = schema,
     };
 
     const bytes = try tuple.serialize(allocator);

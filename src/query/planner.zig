@@ -51,7 +51,10 @@ pub const Planner = struct {
             return error.ColumnCountMismatch;
         }
 
-        const t = Tuple{ .values = stmt.values };
+        const t = Tuple{
+            .values = stmt.values,
+            .schema = table.schema,
+        };
         _ = try table.insert(&t);
     }
 
@@ -199,7 +202,10 @@ test "planner select all from table" {
 
     // Insert data
     const table = catalog.getTable("users").?;
-    const t1 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 1 }, .{ .text = "Alice" } } };
+    const t1 = Tuple{
+        .values = &[_]ast.Value{ .{ .integer = 1 }, .{ .text = "Alice" } },
+        .schema = table.schema,
+    };
     _ = try table.insert(&t1);
 
     var planner = Planner{ .catalog = &catalog, .allocator = allocator };
@@ -236,9 +242,18 @@ test "planner select with where clause" {
     try catalog.createTable("nums", schema);
 
     const table = catalog.getTable("nums").?;
-    const t1 = Tuple{ .values = &[_]ast.Value{.{ .integer = 10 }} };
-    const t2 = Tuple{ .values = &[_]ast.Value{.{ .integer = 20 }} };
-    const t3 = Tuple{ .values = &[_]ast.Value{.{ .integer = 30 }} };
+    const t1 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 10 }},
+        .schema = table.schema,
+    };
+    const t2 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 20 }},
+        .schema = table.schema,
+    };
+    const t3 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 30 }},
+        .schema = table.schema,
+    };
     _ = try table.insert(&t1);
     _ = try table.insert(&t2);
     _ = try table.insert(&t3);
@@ -283,7 +298,10 @@ test "planner select specific columns" {
     try catalog.createTable("people", schema);
 
     const table = catalog.getTable("people").?;
-    const t1 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 1 }, .{ .text = "Bob" }, .{ .integer = 25 } } };
+    const t1 = Tuple{
+        .values = &[_]ast.Value{ .{ .integer = 1 }, .{ .text = "Bob" }, .{ .integer = 25 } },
+        .schema = table.schema,
+    };
     _ = try table.insert(&t1);
 
     var planner = Planner{ .catalog = &catalog, .allocator = allocator };
@@ -424,9 +442,18 @@ test "planner uses IndexScan when index exists" {
     try catalog.createTable("users", schema);
 
     const table = catalog.getTable("users").?;
-    const t1 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 10 }, .{ .text = "Alice" } } };
-    const t2 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 20 }, .{ .text = "Bob" } } };
-    const t3 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 30 }, .{ .text = "Charlie" } } };
+    const t1 = Tuple{
+        .values = &[_]ast.Value{ .{ .integer = 10 }, .{ .text = "Alice" } },
+        .schema = table.schema,
+    };
+    const t2 = Tuple{
+        .values = &[_]ast.Value{ .{ .integer = 20 }, .{ .text = "Bob" } },
+        .schema = table.schema,
+    };
+    const t3 = Tuple{
+        .values = &[_]ast.Value{ .{ .integer = 30 }, .{ .text = "Charlie" } },
+        .schema = table.schema,
+    };
     _ = try table.insert(&t1);
     _ = try table.insert(&t2);
     _ = try table.insert(&t3);
@@ -472,7 +499,10 @@ test "planner uses SeqScan when no index" {
     try catalog.createTable("nums", schema);
 
     const table = catalog.getTable("nums").?;
-    const t1 = Tuple{ .values = &[_]ast.Value{.{ .integer = 10 }} };
+    const t1 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 10 }},
+        .schema = table.schema,
+    };
     _ = try table.insert(&t1);
 
     // No index created
@@ -508,7 +538,10 @@ test "planner uses SeqScan for neq condition even with index" {
     try catalog.createTable("nums", schema);
 
     const table = catalog.getTable("nums").?;
-    const t1 = Tuple{ .values = &[_]ast.Value{.{ .integer = 10 }} };
+    const t1 = Tuple{
+        .values = &[_]ast.Value{.{ .integer = 10 }},
+        .schema = table.schema,
+    };
     _ = try table.insert(&t1);
 
     // Create index
@@ -593,8 +626,14 @@ test "planner select with join" {
     try catalog.createTable("users", user_schema);
 
     const users = catalog.getTable("users").?;
-    const user1 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 1 }, .{ .text = "Alice" } } };
-    const user2 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 2 }, .{ .text = "Bob" } } };
+    const user1 = Tuple{
+        .values = &[_]ast.Value{ .{ .integer = 1 }, .{ .text = "Alice" } },
+        .schema = users.schema,
+    };
+    const user2 = Tuple{
+        .values = &[_]ast.Value{ .{ .integer = 2 }, .{ .text = "Bob" } },
+        .schema = users.schema,
+    };
     _ = try users.insert(&user1);
     _ = try users.insert(&user2);
 
@@ -608,8 +647,14 @@ test "planner select with join" {
     try catalog.createTable("orders", order_schema);
 
     const orders = catalog.getTable("orders").?;
-    const o1 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 100 }, .{ .integer = 1 } } };
-    const o2 = Tuple{ .values = &[_]ast.Value{ .{ .integer = 101 }, .{ .integer = 2 } } };
+    const o1 = Tuple{
+        .values = &[_]ast.Value{ .{ .integer = 100 }, .{ .integer = 1 } },
+        .schema = orders.schema,
+    };
+    const o2 = Tuple{
+        .values = &[_]ast.Value{ .{ .integer = 101 }, .{ .integer = 2 } },
+        .schema = orders.schema,
+    };
     _ = try orders.insert(&o1);
     _ = try orders.insert(&o2);
 

@@ -132,7 +132,10 @@ test "catalog table can insert and retrieve data" {
     try catalog.createTable("test", schema);
 
     const table = catalog.getTable("test").?;
-    const t = tuple.Tuple{ .values = &[_]ast.Value{.{ .integer = 42 }} };
+    const t = tuple.Tuple{
+        .values = &[_]ast.Value{.{ .integer = 42 }},
+        .schema = schema,
+    };
     const rid = try table.insert(&t);
 
     var result = (try table.get(rid, allocator)).?;
