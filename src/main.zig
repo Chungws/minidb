@@ -1,4 +1,5 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 const Catalog = @import("query/catalog.zig").Catalog;
 const Parser = @import("sql/parser.zig").Parser;
@@ -7,6 +8,12 @@ const Executor = @import("query/executor.zig").Executor;
 const Value = @import("sql/ast.zig").Value;
 const Statement = @import("sql/ast.zig").Statement;
 const Tuple = @import("record/tuple.zig").Tuple;
+const TransactionManager = @import("tx/transaction.zig").TransactionManager;
+
+pub const ExecutionError = error{
+    TransactionAlreadyExist,
+    TransactionNotExist,
+};
 
 // ============ Result Types ============
 
@@ -38,53 +45,93 @@ pub const ExecuteResult = union(enum) {
     err: ExecuteError,
 };
 
-// ============ Pure Functions ============
+pub const Session = struct {
+    catalog: *Catalog,
+    allocator: Allocator,
+    txn_mgr: TransactionManager,
+    current_txn: ?u64,
 
-pub fn execute(catalog: *Catalog, sql: []const u8, allocator: std.mem.Allocator) ExecuteResult {
-    var parser = Parser.init(sql, allocator);
-    const stmt = parser.parse() catch |e| return .{ .err = .{ .parse = e } };
-    defer parser.freeStatement(stmt);
-
-    return executeStatement(catalog, stmt, allocator);
-}
-
-fn executeStatement(catalog: *Catalog, stmt: Statement, allocator: std.mem.Allocator) ExecuteResult {
-    var planner = Planner{ .allocator = allocator, .catalog = catalog };
-
-    switch (stmt) {
-        .create_table => |crt| {
-            planner.executeCreateTable(crt) catch |e| return .{ .err = .{ .execute = e } };
-            return .table_created;
-        },
-        .create_index => |cri| {
-            planner.executeCreateIndex(cri) catch |e| return .{ .err = .{ .execute = e } };
-            return .index_created;
-        },
-        .insert => |ins| {
-            planner.executeInsert(ins) catch |e| return .{ .err = .{ .execute = e } };
-            return .row_inserted;
-        },
-        .select => |sel| {
-            var exec = planner.planSelect(sel) catch |e| return .{ .err = .{ .execute = e } };
-            defer planner.destroyPlan(exec);
-
-            var rows = std.ArrayList(Tuple).empty;
-            while (exec.next() catch null) |row| {
-                rows.append(allocator, row) catch return .{ .err = .{ .execute = error.OutOfMemory } };
-            }
-            return .{ .select = .{ .rows = rows, .allocator = allocator } };
-        },
-        .begin => {
-            return .transaction_started;
-        },
-        .commit => {
-            return .transaction_committed;
-        },
-        .abort => {
-            return .transaction_aborted;
-        },
+    pub fn init(catalog: *Catalog, allocator: Allocator) Session {
+        return .{
+            .catalog = catalog,
+            .allocator = allocator,
+            .txn_mgr = TransactionManager.init(allocator),
+            .current_txn = null,
+        };
     }
-}
+
+    pub fn deinit(self: *Session) void {
+        self.txn_mgr.deinit();
+    }
+
+    pub fn currentTxnId(self: *const Session) ?u64 {
+        return self.current_txn;
+    }
+
+    pub fn execute(self: *Session, sql: []const u8) ExecuteResult {
+        var parser = Parser.init(sql, self.allocator);
+        const stmt = parser.parse() catch |e| return .{ .err = .{ .parse = e } };
+        defer parser.freeStatement(stmt);
+
+        return self.executeStatement(stmt);
+    }
+
+    fn executeStatement(self: *Session, stmt: Statement) ExecuteResult {
+        var planner = Planner{
+            .allocator = self.allocator,
+            .catalog = self.catalog,
+        };
+
+        switch (stmt) {
+            .create_table => |crt| {
+                planner.executeCreateTable(crt) catch |e| return .{ .err = .{ .execute = e } };
+                return .table_created;
+            },
+            .create_index => |cri| {
+                planner.executeCreateIndex(cri) catch |e| return .{ .err = .{ .execute = e } };
+                return .index_created;
+            },
+            .insert => |ins| {
+                planner.executeInsert(ins) catch |e| return .{ .err = .{ .execute = e } };
+                return .row_inserted;
+            },
+            .select => |sel| {
+                var exec = planner.planSelect(sel) catch |e| return .{ .err = .{ .execute = e } };
+                defer planner.destroyPlan(exec);
+
+                var rows = std.ArrayList(Tuple).empty;
+                while (exec.next() catch null) |row| {
+                    rows.append(self.allocator, row) catch return .{ .err = .{ .execute = error.OutOfMemory } };
+                }
+                return .{ .select = .{ .rows = rows, .allocator = self.allocator } };
+            },
+            .begin => {
+                if (self.current_txn != null) {
+                    return .{ .err = .{ .execute = error.TransactionAlreadyExist } };
+                }
+                const tx = self.txn_mgr.begin() catch |e| return .{ .err = .{ .execute = e } };
+                self.current_txn = tx.id;
+                return .transaction_started;
+            },
+            .commit => {
+                if (self.current_txn == null) {
+                    return .{ .err = .{ .execute = error.TransactionNotExist } };
+                }
+                self.txn_mgr.commit(self.current_txn.?) catch |e| return .{ .err = .{ .execute = e } };
+                self.current_txn = null;
+                return .transaction_committed;
+            },
+            .abort => {
+                if (self.current_txn == null) {
+                    return .{ .err = .{ .execute = error.TransactionNotExist } };
+                }
+                self.txn_mgr.abort(self.current_txn.?) catch |e| return .{ .err = .{ .execute = e } };
+                self.current_txn = null;
+                return .transaction_aborted;
+            },
+        }
+    }
+};
 
 // ============ I/O Functions ============
 
@@ -139,6 +186,9 @@ pub fn main() !void {
     var catalog = Catalog.init(allocator);
     defer catalog.deinit();
 
+    var session = Session.init(&catalog, allocator);
+    defer session.deinit();
+
     var stdout_writer = std.fs.File.stdout().writer(&.{});
     var stdout = &stdout_writer.interface;
     var stdin = std.fs.File.stdin();
@@ -167,45 +217,54 @@ pub fn main() !void {
             break;
         }
 
-        var result = execute(&catalog, line, allocator);
+        var result = session.execute(line);
         try printResult(&result, stdout);
     }
 }
 
 // ============ Integration Tests ============
 
-test "execute: CREATE TABLE" {
+test "session: CREATE TABLE" {
     const allocator = std.testing.allocator;
 
     var catalog = Catalog.init(allocator);
     defer catalog.deinit();
 
-    const result = execute(&catalog, "CREATE TABLE users (id INT NOT NULL, name TEXT)", allocator);
+    var session = Session.init(&catalog, allocator);
+    defer session.deinit();
+
+    const result = session.execute("CREATE TABLE users (id INT NOT NULL, name TEXT)");
     try std.testing.expect(result == .table_created);
 }
 
-test "execute: INSERT" {
+test "session: INSERT" {
     const allocator = std.testing.allocator;
 
     var catalog = Catalog.init(allocator);
     defer catalog.deinit();
 
-    _ = execute(&catalog, "CREATE TABLE users (id INT NOT NULL, name TEXT)", allocator);
-    const result = execute(&catalog, "INSERT INTO users VALUES (1, 'Alice')", allocator);
+    var session = Session.init(&catalog, allocator);
+    defer session.deinit();
+
+    _ = session.execute("CREATE TABLE users (id INT NOT NULL, name TEXT)");
+    const result = session.execute("INSERT INTO users VALUES (1, 'Alice')");
     try std.testing.expect(result == .row_inserted);
 }
 
-test "execute: SELECT" {
+test "session: SELECT" {
     const allocator = std.testing.allocator;
 
     var catalog = Catalog.init(allocator);
     defer catalog.deinit();
 
-    _ = execute(&catalog, "CREATE TABLE users (id INT NOT NULL, name TEXT)", allocator);
-    _ = execute(&catalog, "INSERT INTO users VALUES (1, 'Alice')", allocator);
-    _ = execute(&catalog, "INSERT INTO users VALUES (2, 'Bob')", allocator);
+    var session = Session.init(&catalog, allocator);
+    defer session.deinit();
 
-    var result = execute(&catalog, "SELECT * FROM users", allocator);
+    _ = session.execute("CREATE TABLE users (id INT NOT NULL, name TEXT)");
+    _ = session.execute("INSERT INTO users VALUES (1, 'Alice')");
+    _ = session.execute("INSERT INTO users VALUES (2, 'Bob')");
+
+    var result = session.execute("SELECT * FROM users");
     try std.testing.expect(result == .select);
 
     var sel = &result.select;
@@ -216,18 +275,21 @@ test "execute: SELECT" {
     try std.testing.expectEqual(@as(i64, 2), sel.rows.items[1].values[0].integer);
 }
 
-test "execute: SELECT with WHERE" {
+test "session: SELECT with WHERE" {
     const allocator = std.testing.allocator;
 
     var catalog = Catalog.init(allocator);
     defer catalog.deinit();
 
-    _ = execute(&catalog, "CREATE TABLE nums (val INT NOT NULL)", allocator);
-    _ = execute(&catalog, "INSERT INTO nums VALUES (10)", allocator);
-    _ = execute(&catalog, "INSERT INTO nums VALUES (20)", allocator);
-    _ = execute(&catalog, "INSERT INTO nums VALUES (30)", allocator);
+    var session = Session.init(&catalog, allocator);
+    defer session.deinit();
 
-    var result = execute(&catalog, "SELECT * FROM nums WHERE val > 15", allocator);
+    _ = session.execute("CREATE TABLE nums (val INT NOT NULL)");
+    _ = session.execute("INSERT INTO nums VALUES (10)");
+    _ = session.execute("INSERT INTO nums VALUES (20)");
+    _ = session.execute("INSERT INTO nums VALUES (30)");
+
+    var result = session.execute("SELECT * FROM nums WHERE val > 15");
     try std.testing.expect(result == .select);
 
     var sel = &result.select;
@@ -238,17 +300,20 @@ test "execute: SELECT with WHERE" {
     try std.testing.expectEqual(@as(i64, 30), sel.rows.items[1].values[0].integer);
 }
 
-test "execute: SELECT with text WHERE" {
+test "session: SELECT with text WHERE" {
     const allocator = std.testing.allocator;
 
     var catalog = Catalog.init(allocator);
     defer catalog.deinit();
 
-    _ = execute(&catalog, "CREATE TABLE users (id INT NOT NULL, name TEXT)", allocator);
-    _ = execute(&catalog, "INSERT INTO users VALUES (1, 'Alice')", allocator);
-    _ = execute(&catalog, "INSERT INTO users VALUES (2, 'Bob')", allocator);
+    var session = Session.init(&catalog, allocator);
+    defer session.deinit();
 
-    var result = execute(&catalog, "SELECT * FROM users WHERE name = 'Alice'", allocator);
+    _ = session.execute("CREATE TABLE users (id INT NOT NULL, name TEXT)");
+    _ = session.execute("INSERT INTO users VALUES (1, 'Alice')");
+    _ = session.execute("INSERT INTO users VALUES (2, 'Bob')");
+
+    var result = session.execute("SELECT * FROM users WHERE name = 'Alice'");
     try std.testing.expect(result == .select);
 
     var sel = &result.select;
@@ -259,49 +324,61 @@ test "execute: SELECT with text WHERE" {
     try std.testing.expectEqualStrings("Alice", sel.rows.items[0].values[1].text);
 }
 
-test "execute: table not found" {
+test "session: table not found" {
     const allocator = std.testing.allocator;
 
     var catalog = Catalog.init(allocator);
     defer catalog.deinit();
 
-    const result = execute(&catalog, "SELECT * FROM nonexistent", allocator);
+    var session = Session.init(&catalog, allocator);
+    defer session.deinit();
+
+    const result = session.execute("SELECT * FROM nonexistent");
     try std.testing.expect(result == .err);
 }
 
-test "execute: parse error" {
+test "session: parse error" {
     const allocator = std.testing.allocator;
 
     var catalog = Catalog.init(allocator);
     defer catalog.deinit();
 
-    const result = execute(&catalog, "INVALID SQL", allocator);
+    var session = Session.init(&catalog, allocator);
+    defer session.deinit();
+
+    const result = session.execute("INVALID SQL");
     try std.testing.expect(result == .err);
     try std.testing.expect(result.err == .parse);
 }
 
-test "execute: INSERT column count mismatch" {
+test "session: INSERT column count mismatch" {
     const allocator = std.testing.allocator;
 
     var catalog = Catalog.init(allocator);
     defer catalog.deinit();
 
-    _ = execute(&catalog, "CREATE TABLE users (id INT NOT NULL, name TEXT)", allocator);
-    const result = execute(&catalog, "INSERT INTO users VALUES (1)", allocator);
+    var session = Session.init(&catalog, allocator);
+    defer session.deinit();
+
+    _ = session.execute("CREATE TABLE users (id INT NOT NULL, name TEXT)");
+    const result = session.execute("INSERT INTO users VALUES (1)");
     try std.testing.expect(result == .err);
     try std.testing.expect(result.err == .execute);
 }
 
-test "execute: SELECT specific columns" {
+test "session: SELECT specific columns" {
     const allocator = std.testing.allocator;
 
     var catalog = Catalog.init(allocator);
     defer catalog.deinit();
 
-    _ = execute(&catalog, "CREATE TABLE users (id INT NOT NULL, name TEXT, age INT)", allocator);
-    _ = execute(&catalog, "INSERT INTO users VALUES (1, 'Alice', 30)", allocator);
+    var session = Session.init(&catalog, allocator);
+    defer session.deinit();
 
-    var result = execute(&catalog, "SELECT name, age FROM users", allocator);
+    _ = session.execute("CREATE TABLE users (id INT NOT NULL, name TEXT, age INT)");
+    _ = session.execute("INSERT INTO users VALUES (1, 'Alice', 30)");
+
+    var result = session.execute("SELECT name, age FROM users");
     try std.testing.expect(result == .select);
 
     var sel = &result.select;
@@ -313,16 +390,19 @@ test "execute: SELECT specific columns" {
     try std.testing.expectEqual(@as(i64, 30), sel.rows.items[0].values[1].integer);
 }
 
-test "execute: INSERT and SELECT with NULL" {
+test "session: INSERT and SELECT with NULL" {
     const allocator = std.testing.allocator;
 
     var catalog = Catalog.init(allocator);
     defer catalog.deinit();
 
-    _ = execute(&catalog, "CREATE TABLE users (id INT NOT NULL, name TEXT)", allocator);
-    _ = execute(&catalog, "INSERT INTO users VALUES (1, NULL)", allocator);
+    var session = Session.init(&catalog, allocator);
+    defer session.deinit();
 
-    var result = execute(&catalog, "SELECT * FROM users", allocator);
+    _ = session.execute("CREATE TABLE users (id INT NOT NULL, name TEXT)");
+    _ = session.execute("INSERT INTO users VALUES (1, NULL)");
+
+    var result = session.execute("SELECT * FROM users");
     try std.testing.expect(result == .select);
 
     var sel = &result.select;
@@ -333,14 +413,17 @@ test "execute: INSERT and SELECT with NULL" {
     try std.testing.expect(sel.rows.items[0].values[1] == .null_value);
 }
 
-test "execute: CREATE INDEX" {
+test "session: CREATE INDEX" {
     const allocator = std.testing.allocator;
 
     var catalog = Catalog.init(allocator);
     defer catalog.deinit();
 
-    _ = execute(&catalog, "CREATE TABLE users (id INT NOT NULL, name TEXT)", allocator);
-    const result = execute(&catalog, "CREATE INDEX idx_id ON users (id)", allocator);
+    var session = Session.init(&catalog, allocator);
+    defer session.deinit();
+
+    _ = session.execute("CREATE TABLE users (id INT NOT NULL, name TEXT)");
+    const result = session.execute("CREATE INDEX idx_id ON users (id)");
     try std.testing.expect(result == .index_created);
 
     // Verify index exists
@@ -348,21 +431,24 @@ test "execute: CREATE INDEX" {
     try std.testing.expect(table.indexes.get("id") != null);
 }
 
-test "execute: SELECT with JOIN" {
+test "session: SELECT with JOIN" {
     const allocator = std.testing.allocator;
 
     var catalog = Catalog.init(allocator);
     defer catalog.deinit();
 
-    _ = execute(&catalog, "CREATE TABLE users (id INT NOT NULL, name TEXT)", allocator);
-    _ = execute(&catalog, "CREATE TABLE orders (order_id INT NOT NULL, user_id INT NOT NULL)", allocator);
-    _ = execute(&catalog, "INSERT INTO users VALUES (1, 'Alice')", allocator);
-    _ = execute(&catalog, "INSERT INTO users VALUES (2, 'Bob')", allocator);
-    _ = execute(&catalog, "INSERT INTO orders VALUES (100, 1)", allocator);
-    _ = execute(&catalog, "INSERT INTO orders VALUES (101, 2)", allocator);
-    _ = execute(&catalog, "INSERT INTO orders VALUES (102, 1)", allocator);
+    var session = Session.init(&catalog, allocator);
+    defer session.deinit();
 
-    var result = execute(&catalog, "SELECT * FROM users JOIN orders ON users.id = orders.user_id", allocator);
+    _ = session.execute("CREATE TABLE users (id INT NOT NULL, name TEXT)");
+    _ = session.execute("CREATE TABLE orders (order_id INT NOT NULL, user_id INT NOT NULL)");
+    _ = session.execute("INSERT INTO users VALUES (1, 'Alice')");
+    _ = session.execute("INSERT INTO users VALUES (2, 'Bob')");
+    _ = session.execute("INSERT INTO orders VALUES (100, 1)");
+    _ = session.execute("INSERT INTO orders VALUES (101, 2)");
+    _ = session.execute("INSERT INTO orders VALUES (102, 1)");
+
+    var result = session.execute("SELECT * FROM users JOIN orders ON users.id = orders.user_id");
     try std.testing.expect(result == .select);
 
     var sel = &result.select;
@@ -372,18 +458,21 @@ test "execute: SELECT with JOIN" {
     try std.testing.expectEqual(@as(usize, 3), sel.rows.items.len);
 }
 
-test "execute: SELECT with JOIN no matches" {
+test "session: SELECT with JOIN no matches" {
     const allocator = std.testing.allocator;
 
     var catalog = Catalog.init(allocator);
     defer catalog.deinit();
 
-    _ = execute(&catalog, "CREATE TABLE users (id INT NOT NULL, name TEXT)", allocator);
-    _ = execute(&catalog, "CREATE TABLE orders (order_id INT NOT NULL, user_id INT NOT NULL)", allocator);
-    _ = execute(&catalog, "INSERT INTO users VALUES (1, 'Alice')", allocator);
-    _ = execute(&catalog, "INSERT INTO orders VALUES (100, 999)", allocator);
+    var session = Session.init(&catalog, allocator);
+    defer session.deinit();
 
-    var result = execute(&catalog, "SELECT * FROM users JOIN orders ON users.id = orders.user_id", allocator);
+    _ = session.execute("CREATE TABLE users (id INT NOT NULL, name TEXT)");
+    _ = session.execute("CREATE TABLE orders (order_id INT NOT NULL, user_id INT NOT NULL)");
+    _ = session.execute("INSERT INTO users VALUES (1, 'Alice')");
+    _ = session.execute("INSERT INTO orders VALUES (100, 999)");
+
+    var result = session.execute("SELECT * FROM users JOIN orders ON users.id = orders.user_id");
     try std.testing.expect(result == .select);
 
     var sel = &result.select;
@@ -392,18 +481,21 @@ test "execute: SELECT with JOIN no matches" {
     try std.testing.expectEqual(@as(usize, 0), sel.rows.items.len);
 }
 
-test "execute: SELECT columns with JOIN" {
+test "session: SELECT columns with JOIN" {
     const allocator = std.testing.allocator;
 
     var catalog = Catalog.init(allocator);
     defer catalog.deinit();
 
-    _ = execute(&catalog, "CREATE TABLE users (id INT NOT NULL, name TEXT)", allocator);
-    _ = execute(&catalog, "CREATE TABLE orders (order_id INT NOT NULL, user_id INT NOT NULL)", allocator);
-    _ = execute(&catalog, "INSERT INTO users VALUES (1, 'Alice')", allocator);
-    _ = execute(&catalog, "INSERT INTO orders VALUES (100, 1)", allocator);
+    var session = Session.init(&catalog, allocator);
+    defer session.deinit();
 
-    var result = execute(&catalog, "SELECT name, order_id FROM users JOIN orders ON users.id = orders.user_id", allocator);
+    _ = session.execute("CREATE TABLE users (id INT NOT NULL, name TEXT)");
+    _ = session.execute("CREATE TABLE orders (order_id INT NOT NULL, user_id INT NOT NULL)");
+    _ = session.execute("INSERT INTO users VALUES (1, 'Alice')");
+    _ = session.execute("INSERT INTO orders VALUES (100, 1)");
+
+    var result = session.execute("SELECT name, order_id FROM users JOIN orders ON users.id = orders.user_id");
     try std.testing.expect(result == .select);
 
     var sel = &result.select;
@@ -416,32 +508,38 @@ test "execute: SELECT columns with JOIN" {
     try std.testing.expectEqual(@as(i64, 100), sel.rows.items[0].values[1].integer);
 }
 
-test "execute: SELECT with JOIN right table not found" {
+test "session: SELECT with JOIN right table not found" {
     const allocator = std.testing.allocator;
 
     var catalog = Catalog.init(allocator);
     defer catalog.deinit();
 
-    _ = execute(&catalog, "CREATE TABLE users (id INT NOT NULL, name TEXT)", allocator);
+    var session = Session.init(&catalog, allocator);
+    defer session.deinit();
 
-    const result = execute(&catalog, "SELECT * FROM users JOIN nonexistent ON users.id = nonexistent.uid", allocator);
+    _ = session.execute("CREATE TABLE users (id INT NOT NULL, name TEXT)");
+
+    const result = session.execute("SELECT * FROM users JOIN nonexistent ON users.id = nonexistent.uid");
     try std.testing.expect(result == .err);
     try std.testing.expect(result.err == .execute);
 }
 
-test "execute: SELECT uses index after CREATE INDEX" {
+test "session: SELECT uses index after CREATE INDEX" {
     const allocator = std.testing.allocator;
 
     var catalog = Catalog.init(allocator);
     defer catalog.deinit();
 
-    _ = execute(&catalog, "CREATE TABLE users (id INT NOT NULL, name TEXT)", allocator);
-    _ = execute(&catalog, "INSERT INTO users VALUES (10, 'Alice')", allocator);
-    _ = execute(&catalog, "INSERT INTO users VALUES (20, 'Bob')", allocator);
-    _ = execute(&catalog, "INSERT INTO users VALUES (30, 'Charlie')", allocator);
-    _ = execute(&catalog, "CREATE INDEX idx_id ON users (id)", allocator);
+    var session = Session.init(&catalog, allocator);
+    defer session.deinit();
 
-    var result = execute(&catalog, "SELECT * FROM users WHERE id = 20", allocator);
+    _ = session.execute("CREATE TABLE users (id INT NOT NULL, name TEXT)");
+    _ = session.execute("INSERT INTO users VALUES (10, 'Alice')");
+    _ = session.execute("INSERT INTO users VALUES (20, 'Bob')");
+    _ = session.execute("INSERT INTO users VALUES (30, 'Charlie')");
+    _ = session.execute("CREATE INDEX idx_id ON users (id)");
+
+    var result = session.execute("SELECT * FROM users WHERE id = 20");
     try std.testing.expect(result == .select);
 
     var sel = &result.select;
@@ -450,4 +548,126 @@ test "execute: SELECT uses index after CREATE INDEX" {
     try std.testing.expectEqual(@as(usize, 1), sel.rows.items.len);
     try std.testing.expectEqual(@as(i64, 20), sel.rows.items[0].values[0].integer);
     try std.testing.expectEqualStrings("Bob", sel.rows.items[0].values[1].text);
+}
+
+// ============ Transaction Tests ============
+
+test "session: BEGIN starts transaction" {
+    const allocator = std.testing.allocator;
+
+    var catalog = Catalog.init(allocator);
+    defer catalog.deinit();
+
+    var session = Session.init(&catalog, allocator);
+    defer session.deinit();
+
+    const result = session.execute("BEGIN");
+    try std.testing.expect(result == .transaction_started);
+    try std.testing.expect(session.currentTxnId() != null);
+}
+
+test "session: COMMIT ends transaction" {
+    const allocator = std.testing.allocator;
+
+    var catalog = Catalog.init(allocator);
+    defer catalog.deinit();
+
+    var session = Session.init(&catalog, allocator);
+    defer session.deinit();
+
+    _ = session.execute("BEGIN");
+    const result = session.execute("COMMIT");
+    try std.testing.expect(result == .transaction_committed);
+    try std.testing.expect(session.currentTxnId() == null);
+}
+
+test "session: ABORT ends transaction" {
+    const allocator = std.testing.allocator;
+
+    var catalog = Catalog.init(allocator);
+    defer catalog.deinit();
+
+    var session = Session.init(&catalog, allocator);
+    defer session.deinit();
+
+    _ = session.execute("BEGIN");
+    const result = session.execute("ABORT");
+    try std.testing.expect(result == .transaction_aborted);
+    try std.testing.expect(session.currentTxnId() == null);
+}
+
+test "session: COMMIT without BEGIN returns error" {
+    const allocator = std.testing.allocator;
+
+    var catalog = Catalog.init(allocator);
+    defer catalog.deinit();
+
+    var session = Session.init(&catalog, allocator);
+    defer session.deinit();
+
+    const result = session.execute("COMMIT");
+    try std.testing.expect(result == .err);
+}
+
+test "session: ABORT without BEGIN returns error" {
+    const allocator = std.testing.allocator;
+
+    var catalog = Catalog.init(allocator);
+    defer catalog.deinit();
+
+    var session = Session.init(&catalog, allocator);
+    defer session.deinit();
+
+    const result = session.execute("ABORT");
+    try std.testing.expect(result == .err);
+}
+
+test "session: BEGIN twice returns error" {
+    const allocator = std.testing.allocator;
+
+    var catalog = Catalog.init(allocator);
+    defer catalog.deinit();
+
+    var session = Session.init(&catalog, allocator);
+    defer session.deinit();
+
+    _ = session.execute("BEGIN");
+    const result = session.execute("BEGIN");
+    try std.testing.expect(result == .err);
+}
+
+test "session: regular queries work without transaction" {
+    const allocator = std.testing.allocator;
+
+    var catalog = Catalog.init(allocator);
+    defer catalog.deinit();
+
+    var session = Session.init(&catalog, allocator);
+    defer session.deinit();
+
+    const result1 = session.execute("CREATE TABLE users (id INT NOT NULL)");
+    try std.testing.expect(result1 == .table_created);
+
+    const result2 = session.execute("INSERT INTO users VALUES (1)");
+    try std.testing.expect(result2 == .row_inserted);
+
+    var result3 = session.execute("SELECT * FROM users");
+    try std.testing.expect(result3 == .select);
+    result3.select.deinit();
+}
+
+test "session: queries work inside transaction" {
+    const allocator = std.testing.allocator;
+
+    var catalog = Catalog.init(allocator);
+    defer catalog.deinit();
+
+    var session = Session.init(&catalog, allocator);
+    defer session.deinit();
+
+    _ = session.execute("CREATE TABLE users (id INT NOT NULL)");
+    _ = session.execute("BEGIN");
+    const result = session.execute("INSERT INTO users VALUES (1)");
+    try std.testing.expect(result == .row_inserted);
+    _ = session.execute("COMMIT");
 }
