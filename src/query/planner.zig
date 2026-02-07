@@ -191,8 +191,10 @@ const Tuple = tuple.Tuple;
 
 test "planner select all from table" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_planner_1";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     const schema = Schema{
@@ -233,8 +235,10 @@ test "planner select all from table" {
 
 test "planner select with where clause" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_planner_2";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     const schema = Schema{
@@ -287,8 +291,10 @@ test "planner select with where clause" {
 
 test "planner select specific columns" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_planner_3";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     const schema = Schema{
@@ -330,8 +336,10 @@ test "planner select specific columns" {
 
 test "planner table not found" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_planner_4";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     var planner = Planner{ .catalog = &catalog, .allocator = allocator };
@@ -349,8 +357,10 @@ test "planner table not found" {
 
 test "executeCreate creates table" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_planner_5";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     var planner = Planner{ .catalog = &catalog, .allocator = allocator };
@@ -373,8 +383,10 @@ test "executeCreate creates table" {
 
 test "executeInsert inserts row" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_planner_6";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     var planner = Planner{ .catalog = &catalog, .allocator = allocator };
@@ -415,8 +427,10 @@ test "executeInsert inserts row" {
 
 test "executeInsert table not found" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_planner_7";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     var planner = Planner{ .catalog = &catalog, .allocator = allocator };
@@ -432,8 +446,10 @@ test "executeInsert table not found" {
 
 test "planner uses IndexScan when index exists" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_planner_8";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     const schema = Schema{
@@ -490,8 +506,10 @@ test "planner uses IndexScan when index exists" {
 
 test "planner uses SeqScan when no index" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_planner_9";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     const schema = Schema{
@@ -529,8 +547,10 @@ test "planner uses SeqScan when no index" {
 
 test "planner uses SeqScan for neq condition even with index" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_planner_10";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     const schema = Schema{
@@ -569,8 +589,10 @@ test "planner uses SeqScan for neq condition even with index" {
 
 test "executeCreateIndex creates index" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_planner_11";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     const schema = Schema{
@@ -597,8 +619,10 @@ test "executeCreateIndex creates index" {
 
 test "executeCreateIndex table not found" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_planner_12";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     var planner = Planner{ .catalog = &catalog, .allocator = allocator };
@@ -615,8 +639,10 @@ test "executeCreateIndex table not found" {
 
 test "planner select with join" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_planner_13";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     // Create users table
@@ -697,8 +723,10 @@ test "planner select with join" {
 
 test "planner select with join right table not found" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_planner_14";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     const schema = Schema{

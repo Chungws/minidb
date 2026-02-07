@@ -12,19 +12,49 @@ const HeapFile = heap.HeapFile;
 const HeapIterator = heap.HeapIterator;
 const RID = heap.RID;
 const LockManager = @import("../tx/lock.zig").LockManager;
+const DiskManager = @import("../storage/disk.zig").DiskManager;
+const BufferPool = @import("../storage/buffer.zig").BufferPool;
 
 pub const Table = struct {
     name: []const u8,
     schema: Schema,
+    disk_mgr: *DiskManager,
+    buffer_pool: *BufferPool,
     heap_file: HeapFile,
     indexes: std.StringHashMap(*BTree),
     allocator: Allocator,
 
-    pub fn init(name: []const u8, schema: Schema, allocator: Allocator, lock: *LockManager) !Table {
-        const heap_file = try HeapFile.init(allocator, lock);
+    pub fn init(
+        name: []const u8,
+        schema: Schema,
+        allocator: Allocator,
+        lock: *LockManager,
+        data_dir: []const u8,
+    ) !Table {
+        const path = try std.fmt.allocPrint(allocator, "{s}/{s}.db", .{ data_dir, name });
+        defer allocator.free(path);
+
+        const disk_mgr = try allocator.create(DiskManager);
+        disk_mgr.* = try DiskManager.init(path);
+        errdefer {
+            disk_mgr.deinit();
+            allocator.destroy(disk_mgr);
+        }
+
+        const buffer_pool = try allocator.create(BufferPool);
+        buffer_pool.* = try BufferPool.init(allocator, 10, disk_mgr);
+        errdefer {
+            buffer_pool.deinit();
+            allocator.destroy(buffer_pool);
+        }
+
+        const heap_file = try HeapFile.init(allocator, buffer_pool, lock);
+
         return .{
             .name = name,
             .schema = schema,
+            .disk_mgr = disk_mgr,
+            .buffer_pool = buffer_pool,
             .heap_file = heap_file,
             .indexes = std.StringHashMap(*BTree).init(allocator),
             .allocator = allocator,
@@ -39,6 +69,10 @@ pub const Table = struct {
         }
         self.indexes.deinit();
         self.heap_file.deinit();
+        self.buffer_pool.deinit();
+        self.allocator.destroy(self.buffer_pool);
+        self.disk_mgr.deinit();
+        self.allocator.destroy(self.disk_mgr);
     }
 
     pub fn insert(self: *Table, t: *const Tuple) !RID {
@@ -55,15 +89,15 @@ pub const Table = struct {
     }
 
     pub fn get(self: *const Table, rid: RID, allocator: Allocator) !?Tuple {
-        const record = self.heap_file.get(rid);
+        const record = try self.heap_file.get(rid);
         if (record) |r| {
             return try Tuple.deserialize(r, self.schema, allocator);
         }
         return null;
     }
 
-    pub fn delete(self: *Table, rid: RID) void {
-        self.heap_file.delete(rid);
+    pub fn delete(self: *Table, rid: RID) !void {
+        try self.heap_file.delete(rid);
     }
 
     pub fn scan(self: *const Table) HeapIterator {
@@ -82,7 +116,7 @@ pub const Table = struct {
         tree.* = BTree.init(self.allocator);
 
         var iter = self.scan();
-        while (iter.next()) |t| {
+        while (try iter.next()) |t| {
             var d = try Tuple.deserialize(t.data, self.schema, self.allocator);
             defer d.deinit(self.allocator);
 
@@ -97,6 +131,10 @@ pub const Table = struct {
 
 test "table init and deinit" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_table_1";
+    std.fs.cwd().makeDir(test_dir) catch {};
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
     var lock_mgr = LockManager.init(allocator);
     defer lock_mgr.deinit();
     const schema = Schema{
@@ -104,7 +142,7 @@ test "table init and deinit" {
             .{ .name = "id", .data_type = .integer, .nullable = false },
         },
     };
-    var table = try Table.init("test_table", schema, allocator, &lock_mgr);
+    var table = try Table.init("test_table", schema, allocator, &lock_mgr, test_dir);
     defer table.deinit();
 
     try std.testing.expectEqualStrings("test_table", table.name);
@@ -112,6 +150,10 @@ test "table init and deinit" {
 
 test "table insert and get" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_table_2";
+    std.fs.cwd().makeDir(test_dir) catch {};
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
     var lock_mgr = LockManager.init(allocator);
     defer lock_mgr.deinit();
     const schema = Schema{
@@ -120,7 +162,7 @@ test "table insert and get" {
             .{ .name = "name", .data_type = .text, .nullable = false },
         },
     };
-    var table = try Table.init("users", schema, allocator, &lock_mgr);
+    var table = try Table.init("users", schema, allocator, &lock_mgr, test_dir);
     defer table.deinit();
 
     const t = Tuple{
@@ -141,6 +183,10 @@ test "table insert and get" {
 
 test "table delete" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_table_3";
+    std.fs.cwd().makeDir(test_dir) catch {};
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
     var lock_mgr = LockManager.init(allocator);
     defer lock_mgr.deinit();
     const schema = Schema{
@@ -148,7 +194,7 @@ test "table delete" {
             .{ .name = "id", .data_type = .integer, .nullable = false },
         },
     };
-    var table = try Table.init("test", schema, allocator, &lock_mgr);
+    var table = try Table.init("test", schema, allocator, &lock_mgr, test_dir);
     defer table.deinit();
 
     const t = Tuple{
@@ -157,7 +203,7 @@ test "table delete" {
     };
     const rid = try table.insert(&t);
 
-    table.delete(rid);
+    try table.delete(rid);
 
     const result = try table.get(rid, allocator);
     try std.testing.expect(result == null);
@@ -165,6 +211,10 @@ test "table delete" {
 
 test "table createIndex and search" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_table_4";
+    std.fs.cwd().makeDir(test_dir) catch {};
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
     var lock_mgr = LockManager.init(allocator);
     defer lock_mgr.deinit();
     const schema = Schema{
@@ -173,7 +223,7 @@ test "table createIndex and search" {
             .{ .name = "name", .data_type = .text, .nullable = false },
         },
     };
-    var table = try Table.init("users", schema, allocator, &lock_mgr);
+    var table = try Table.init("users", schema, allocator, &lock_mgr, test_dir);
     defer table.deinit();
 
     // Insert data first
@@ -213,6 +263,10 @@ test "table createIndex and search" {
 
 test "table insert updates index" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_table_5";
+    std.fs.cwd().makeDir(test_dir) catch {};
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
     var lock_mgr = LockManager.init(allocator);
     defer lock_mgr.deinit();
     const schema = Schema{
@@ -220,7 +274,7 @@ test "table insert updates index" {
             .{ .name = "id", .data_type = .integer, .nullable = false },
         },
     };
-    var table = try Table.init("nums", schema, allocator, &lock_mgr);
+    var table = try Table.init("nums", schema, allocator, &lock_mgr, test_dir);
     defer table.deinit();
 
     // Create index first (empty table)
@@ -241,6 +295,10 @@ test "table insert updates index" {
 
 test "table createIndex ignores non-integer columns" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_table_6";
+    std.fs.cwd().makeDir(test_dir) catch {};
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
     var lock_mgr = LockManager.init(allocator);
     defer lock_mgr.deinit();
     const schema = Schema{
@@ -248,7 +306,7 @@ test "table createIndex ignores non-integer columns" {
             .{ .name = "name", .data_type = .text, .nullable = false },
         },
     };
-    var table = try Table.init("test", schema, allocator, &lock_mgr);
+    var table = try Table.init("test", schema, allocator, &lock_mgr, test_dir);
     defer table.deinit();
 
     // Try to create index on text column - should be ignored

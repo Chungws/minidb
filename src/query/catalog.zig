@@ -9,12 +9,18 @@ pub const Catalog = struct {
     tables: std.StringHashMap(*Table),
     allocator: Allocator,
     lock_mgr: LockManager,
+    data_dir: []const u8,
 
-    pub fn init(allocator: Allocator) Catalog {
+    pub fn init(allocator: Allocator, data_dir: []const u8) !Catalog {
+        std.fs.cwd().makeDir(data_dir) catch |e| {
+            if (e != error.PathAlreadyExists) return e;
+        };
+
         return .{
             .tables = std.StringHashMap(*Table).init(allocator),
             .allocator = allocator,
             .lock_mgr = LockManager.init(allocator),
+            .data_dir = data_dir,
         };
     }
 
@@ -52,6 +58,7 @@ pub const Catalog = struct {
             owned_schema,
             self.allocator,
             &self.lock_mgr,
+            self.data_dir,
         );
         try self.tables.put(owned_name, table_ptr);
     }
@@ -69,7 +76,10 @@ const ColumnDef = ast.ColumnDef;
 
 test "catalog init and deinit" {
     const allocator = std.testing.allocator;
-    var catalog = Catalog.init(allocator);
+    const test_dir = "test_catalog_1";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), catalog.tables.count());
@@ -77,7 +87,10 @@ test "catalog init and deinit" {
 
 test "catalog create and get table" {
     const allocator = std.testing.allocator;
-    var catalog = Catalog.init(allocator);
+    const test_dir = "test_catalog_2";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     const schema = Schema{
@@ -96,7 +109,10 @@ test "catalog create and get table" {
 
 test "catalog get non-existent table returns null" {
     const allocator = std.testing.allocator;
-    var catalog = Catalog.init(allocator);
+    const test_dir = "test_catalog_3";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     const table = catalog.getTable("no_such_table");
@@ -105,7 +121,10 @@ test "catalog get non-existent table returns null" {
 
 test "catalog create multiple tables" {
     const allocator = std.testing.allocator;
-    var catalog = Catalog.init(allocator);
+    const test_dir = "test_catalog_4";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     const schema1 = Schema{
@@ -129,7 +148,10 @@ test "catalog create multiple tables" {
 
 test "catalog table can insert and retrieve data" {
     const allocator = std.testing.allocator;
-    var catalog = Catalog.init(allocator);
+    const test_dir = "test_catalog_5";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     const schema = Schema{

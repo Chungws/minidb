@@ -40,8 +40,10 @@ pub fn recover(wal: *const WAL, catalog: *Catalog, allocator: Allocator) !void {
 
 test "recover committed transaction inserts data" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_recovery_1";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     const schema = Schema{
@@ -78,8 +80,10 @@ test "recover committed transaction inserts data" {
 
 test "recover aborted transaction skips inserts" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_recovery_2";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     const schema = Schema{
@@ -110,8 +114,10 @@ test "recover aborted transaction skips inserts" {
 
 test "recover mixed: only committed transactions applied" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_recovery_3";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     const schema = Schema{
@@ -170,8 +176,10 @@ test "recover mixed: only committed transactions applied" {
 
 test "recover empty WAL does nothing" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_recovery_4";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     const schema = Schema{
@@ -194,8 +202,10 @@ test "recover empty WAL does nothing" {
 
 test "recover uncommitted transaction skips inserts" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_recovery_5";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     const schema = Schema{

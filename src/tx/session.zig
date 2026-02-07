@@ -164,8 +164,10 @@ pub const Session = struct {
 
 test "session: CREATE TABLE" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_session_1";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     var session = Session.init(&catalog, allocator);
@@ -177,8 +179,10 @@ test "session: CREATE TABLE" {
 
 test "session: INSERT" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_session_2";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     var session = Session.init(&catalog, allocator);
@@ -191,8 +195,10 @@ test "session: INSERT" {
 
 test "session: SELECT" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_session_3";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     var session = Session.init(&catalog, allocator);
@@ -215,8 +221,10 @@ test "session: SELECT" {
 
 test "session: BEGIN starts transaction" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_session_4";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     var session = Session.init(&catalog, allocator);
@@ -229,8 +237,10 @@ test "session: BEGIN starts transaction" {
 
 test "session: COMMIT ends transaction" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_session_5";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     var session = Session.init(&catalog, allocator);
@@ -244,8 +254,10 @@ test "session: COMMIT ends transaction" {
 
 test "session: ABORT ends transaction" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_session_6";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     var session = Session.init(&catalog, allocator);
@@ -259,8 +271,10 @@ test "session: ABORT ends transaction" {
 
 test "session: COMMIT without BEGIN returns error" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_session_7";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     var session = Session.init(&catalog, allocator);
@@ -272,8 +286,10 @@ test "session: COMMIT without BEGIN returns error" {
 
 test "session: ABORT without BEGIN returns error" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_session_8";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     var session = Session.init(&catalog, allocator);
@@ -285,8 +301,10 @@ test "session: ABORT without BEGIN returns error" {
 
 test "session: BEGIN twice returns error" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_session_9";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     var session = Session.init(&catalog, allocator);
@@ -301,8 +319,10 @@ test "session: BEGIN twice returns error" {
 
 test "session: BEGIN logs to WAL" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_session_10";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     var session = Session.init(&catalog, allocator);
@@ -318,8 +338,10 @@ test "session: BEGIN logs to WAL" {
 
 test "session: INSERT inside transaction logs to WAL" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_session_11";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     var session = Session.init(&catalog, allocator);
@@ -341,8 +363,10 @@ test "session: INSERT inside transaction logs to WAL" {
 
 test "session: COMMIT logs to WAL" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_session_12";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     var session = Session.init(&catalog, allocator);
@@ -363,8 +387,10 @@ test "session: COMMIT logs to WAL" {
 
 test "session: ABORT logs to WAL" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_session_13";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     var session = Session.init(&catalog, allocator);
@@ -385,8 +411,10 @@ test "session: ABORT logs to WAL" {
 
 test "session: INSERT outside transaction does not log to WAL" {
     const allocator = std.testing.allocator;
+    const test_dir = "test_session_14";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var catalog = Catalog.init(allocator);
+    var catalog = try Catalog.init(allocator, test_dir);
     defer catalog.deinit();
 
     var session = Session.init(&catalog, allocator);

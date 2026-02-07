@@ -12,14 +12,18 @@ pub const HEADER_SIZE: comptime_int = 6;
 pub const SLOT_SIZE: comptime_int = 4;
 
 pub const SlottedPage = struct {
-    page: Page,
+    page: *Page,
 
-    pub fn init(p: Page) SlottedPage {
+    pub fn init(p: *Page) SlottedPage {
         var spage = SlottedPage{ .page = p };
         spage.writeNumSlots(0);
         spage.writeFreeSpaceStart(HEADER_SIZE);
         spage.writeFreeSpaceEnd(PAGE_SIZE);
         return spage;
+    }
+
+    pub fn fromPage(p: *Page) SlottedPage {
+        return SlottedPage{ .page = p };
     }
 
     pub fn insert(self: *SlottedPage, bytes: []const u8) !u16 {
@@ -161,12 +165,14 @@ pub const SlottedPage = struct {
 // ============ Tests ============
 
 test "init page has correct free space" {
-    const spage = SlottedPage.init(Page.init());
+    var p = Page.init();
+    const spage = SlottedPage.init(&p);
     try std.testing.expectEqual(@as(u16, PAGE_SIZE - HEADER_SIZE), spage.freeSpace());
 }
 
 test "insert single record" {
-    var spage = SlottedPage.init(Page.init());
+    var p = Page.init();
+    var spage = SlottedPage.init(&p);
     const data = "hello world";
 
     const slot_id = try spage.insert(data);
@@ -178,7 +184,8 @@ test "insert single record" {
 }
 
 test "insert multiple records" {
-    var spage = SlottedPage.init(Page.init());
+    var p = Page.init();
+    var spage = SlottedPage.init(&p);
 
     const slot0 = try spage.insert("first");
     const slot1 = try spage.insert("second");
@@ -194,7 +201,8 @@ test "insert multiple records" {
 }
 
 test "delete record returns null on get" {
-    var spage = SlottedPage.init(Page.init());
+    var p = Page.init();
+    var spage = SlottedPage.init(&p);
 
     const slot_id = try spage.insert("to be deleted");
     try std.testing.expect(spage.get(slot_id) != null);
@@ -204,12 +212,14 @@ test "delete record returns null on get" {
 }
 
 test "get non-existent slot returns null" {
-    const spage = SlottedPage.init(Page.init());
+    var p = Page.init();
+    const spage = SlottedPage.init(&p);
     try std.testing.expect(spage.get(99) == null);
 }
 
 test "insert fails when not enough space" {
-    var spage = SlottedPage.init(Page.init());
+    var p = Page.init();
+    var spage = SlottedPage.init(&p);
 
     // Fill most of the page
     const large_data = [_]u8{'x'} ** 4000;
@@ -221,7 +231,8 @@ test "insert fails when not enough space" {
 }
 
 test "free space decreases after insert" {
-    var spage = SlottedPage.init(Page.init());
+    var p = Page.init();
+    var spage = SlottedPage.init(&p);
     const initial_free = spage.freeSpace();
 
     const data = "test data";
@@ -234,7 +245,8 @@ test "free space decreases after insert" {
 }
 
 test "reuse deleted slot" {
-    var spage = SlottedPage.init(Page.init());
+    var p = Page.init();
+    var spage = SlottedPage.init(&p);
 
     const slot0 = try spage.insert("first");
     _ = try spage.insert("second");
@@ -248,7 +260,8 @@ test "reuse deleted slot" {
 }
 
 test "compact reclaims deleted record space" {
-    var spage = SlottedPage.init(Page.init());
+    var p = Page.init();
+    var spage = SlottedPage.init(&p);
 
     // Insert three records
     const slot0 = try spage.insert("aaaa"); // 4 bytes
@@ -277,7 +290,8 @@ test "compact reclaims deleted record space" {
 }
 
 test "compact with all records deleted" {
-    var spage = SlottedPage.init(Page.init());
+    var p = Page.init();
+    var spage = SlottedPage.init(&p);
 
     const slot0 = try spage.insert("test1");
     const slot1 = try spage.insert("test2");
@@ -293,7 +307,8 @@ test "compact with all records deleted" {
 }
 
 test "insert triggers auto compact when fragmented" {
-    var spage = SlottedPage.init(Page.init());
+    var p = Page.init();
+    var spage = SlottedPage.init(&p);
 
     // Fill page with records
     const large_data = [_]u8{'x'} ** 2000;
@@ -318,7 +333,8 @@ test "insert triggers auto compact when fragmented" {
 }
 
 test "get with out of bounds slot_id returns null" {
-    var spage = SlottedPage.init(Page.init());
+    var p = Page.init();
+    var spage = SlottedPage.init(&p);
     _ = try spage.insert("test");
 
     // slot_id 0 exists, but 1 does not
@@ -328,7 +344,8 @@ test "get with out of bounds slot_id returns null" {
 }
 
 test "insert and get empty record" {
-    var spage = SlottedPage.init(Page.init());
+    var p = Page.init();
+    var spage = SlottedPage.init(&p);
 
     const slot_id = try spage.insert("");
 
