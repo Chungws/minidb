@@ -11,6 +11,9 @@ pub const TokenType = enum {
     index,
     on,
     join,
+    begin,
+    commit,
+    abort,
 
     // Types
     int_type, // INT

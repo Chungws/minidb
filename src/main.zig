@@ -31,6 +31,9 @@ pub const ExecuteResult = union(enum) {
     table_created,
     index_created,
     row_inserted,
+    transaction_started,
+    transaction_committed,
+    transaction_aborted,
     select: SelectResult,
     err: ExecuteError,
 };
@@ -71,6 +74,15 @@ fn executeStatement(catalog: *Catalog, stmt: Statement, allocator: std.mem.Alloc
             }
             return .{ .select = .{ .rows = rows, .allocator = allocator } };
         },
+        .begin => {
+            return .transaction_started;
+        },
+        .commit => {
+            return .transaction_committed;
+        },
+        .abort => {
+            return .transaction_aborted;
+        },
     }
 }
 
@@ -98,6 +110,9 @@ fn printResult(result: *ExecuteResult, writer: *std.Io.Writer) !void {
         .table_created => try writer.writeAll("Table created\n"),
         .index_created => try writer.writeAll("Index created\n"),
         .row_inserted => try writer.writeAll("1 row inserted\n"),
+        .transaction_started => try writer.writeAll("Transaction started\n"),
+        .transaction_committed => try writer.writeAll("Transaction committed\n"),
+        .transaction_aborted => try writer.writeAll("Transaction aborted\n"),
         .select => |*sel| {
             defer sel.deinit();
             for (sel.rows.items) |row| {

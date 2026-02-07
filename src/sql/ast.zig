@@ -11,6 +11,9 @@ pub const Statement = union(enum) {
     insert: InsertStatement,
     create_table: CreateTableStatement,
     create_index: CreateIndexStatement,
+    begin,
+    commit,
+    abort,
 };
 
 pub const SelectStatement = struct {

@@ -45,6 +45,9 @@ pub const Parser = struct {
                 self.allocator.free(statement.create_table.columns);
             },
             .create_index => {},
+            .begin => {},
+            .commit => {},
+            .abort => {},
         }
     }
 
@@ -84,6 +87,18 @@ pub const Parser = struct {
             },
             TokenType.create => {
                 return try self.parseCreate();
+            },
+            TokenType.begin => {
+                self.advance();
+                return Statement.begin;
+            },
+            TokenType.commit => {
+                self.advance();
+                return Statement.commit;
+            },
+            TokenType.abort => {
+                self.advance();
+                return Statement.abort;
             },
             else => return error.UnexpectedToken,
         }
@@ -875,4 +890,41 @@ test "parse SELECT without JOIN" {
     const select = stmt.select;
 
     try std.testing.expect(select.join == null);
+}
+
+test "parse BEGIN" {
+    const allocator = std.testing.allocator;
+    var parser = Parser.init("BEGIN", allocator);
+
+    const stmt = try parser.parse();
+    try std.testing.expect(stmt == .begin);
+}
+
+test "parse COMMIT" {
+    const allocator = std.testing.allocator;
+    var parser = Parser.init("COMMIT", allocator);
+
+    const stmt = try parser.parse();
+    try std.testing.expect(stmt == .commit);
+}
+
+test "parse ABORT" {
+    const allocator = std.testing.allocator;
+    var parser = Parser.init("ABORT", allocator);
+
+    const stmt = try parser.parse();
+    try std.testing.expect(stmt == .abort);
+}
+
+test "parse transaction keywords case insensitive" {
+    const allocator = std.testing.allocator;
+
+    var parser1 = Parser.init("begin", allocator);
+    try std.testing.expect((try parser1.parse()) == .begin);
+
+    var parser2 = Parser.init("COMMIT", allocator);
+    try std.testing.expect((try parser2.parse()) == .commit);
+
+    var parser3 = Parser.init("Abort", allocator);
+    try std.testing.expect((try parser3.parse()) == .abort);
 }
