@@ -11,6 +11,7 @@ const heap = @import("heap.zig");
 const HeapFile = heap.HeapFile;
 const HeapIterator = heap.HeapIterator;
 const RID = heap.RID;
+const LockManager = @import("../tx/lock.zig").LockManager;
 
 pub const Table = struct {
     name: []const u8,
@@ -19,8 +20,8 @@ pub const Table = struct {
     indexes: std.StringHashMap(*BTree),
     allocator: Allocator,
 
-    pub fn init(name: []const u8, schema: Schema, allocator: Allocator) !Table {
-        const heap_file = try HeapFile.init(allocator);
+    pub fn init(name: []const u8, schema: Schema, allocator: Allocator, lock: *LockManager) !Table {
+        const heap_file = try HeapFile.init(allocator, lock);
         return .{
             .name = name,
             .schema = schema,
@@ -96,12 +97,14 @@ pub const Table = struct {
 
 test "table init and deinit" {
     const allocator = std.testing.allocator;
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
     const schema = Schema{
         .columns = &[_]ast.ColumnDef{
             .{ .name = "id", .data_type = .integer, .nullable = false },
         },
     };
-    var table = try Table.init("test_table", schema, allocator);
+    var table = try Table.init("test_table", schema, allocator, &lock_mgr);
     defer table.deinit();
 
     try std.testing.expectEqualStrings("test_table", table.name);
@@ -109,13 +112,15 @@ test "table init and deinit" {
 
 test "table insert and get" {
     const allocator = std.testing.allocator;
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
     const schema = Schema{
         .columns = &[_]ast.ColumnDef{
             .{ .name = "id", .data_type = .integer, .nullable = false },
             .{ .name = "name", .data_type = .text, .nullable = false },
         },
     };
-    var table = try Table.init("users", schema, allocator);
+    var table = try Table.init("users", schema, allocator, &lock_mgr);
     defer table.deinit();
 
     const t = Tuple{
@@ -136,12 +141,14 @@ test "table insert and get" {
 
 test "table delete" {
     const allocator = std.testing.allocator;
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
     const schema = Schema{
         .columns = &[_]ast.ColumnDef{
             .{ .name = "id", .data_type = .integer, .nullable = false },
         },
     };
-    var table = try Table.init("test", schema, allocator);
+    var table = try Table.init("test", schema, allocator, &lock_mgr);
     defer table.deinit();
 
     const t = Tuple{
@@ -158,13 +165,15 @@ test "table delete" {
 
 test "table createIndex and search" {
     const allocator = std.testing.allocator;
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
     const schema = Schema{
         .columns = &[_]ast.ColumnDef{
             .{ .name = "id", .data_type = .integer, .nullable = false },
             .{ .name = "name", .data_type = .text, .nullable = false },
         },
     };
-    var table = try Table.init("users", schema, allocator);
+    var table = try Table.init("users", schema, allocator, &lock_mgr);
     defer table.deinit();
 
     // Insert data first
@@ -204,12 +213,14 @@ test "table createIndex and search" {
 
 test "table insert updates index" {
     const allocator = std.testing.allocator;
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
     const schema = Schema{
         .columns = &[_]ast.ColumnDef{
             .{ .name = "id", .data_type = .integer, .nullable = false },
         },
     };
-    var table = try Table.init("nums", schema, allocator);
+    var table = try Table.init("nums", schema, allocator, &lock_mgr);
     defer table.deinit();
 
     // Create index first (empty table)
@@ -230,12 +241,14 @@ test "table insert updates index" {
 
 test "table createIndex ignores non-integer columns" {
     const allocator = std.testing.allocator;
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
     const schema = Schema{
         .columns = &[_]ast.ColumnDef{
             .{ .name = "name", .data_type = .text, .nullable = false },
         },
     };
-    var table = try Table.init("test", schema, allocator);
+    var table = try Table.init("test", schema, allocator, &lock_mgr);
     defer table.deinit();
 
     // Try to create index on text column - should be ignored

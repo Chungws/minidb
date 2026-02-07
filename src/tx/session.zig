@@ -11,6 +11,7 @@ const Tuple = @import("../record/tuple.zig").Tuple;
 const TransactionManager = @import("transaction.zig").TransactionManager;
 const WAL = @import("wal.zig").WAL;
 const LogRecord = @import("wal.zig").LogRecord;
+const recover = @import("recovery.zig").recover;
 
 pub const SessionError = error{
     TransactionAlreadyExist,
@@ -73,6 +74,13 @@ pub const Session = struct {
 
     pub fn getWAL(self: *const Session) *const WAL {
         return &self.wal;
+    }
+
+    pub fn recovery(self: *Session) ExecuteResult {
+        recover(&self.wal, self.catalog, self.allocator) catch |e| {
+            return .{ .err = .{ .execute = e } };
+        };
+        return .transaction_committed;
     }
 
     pub fn execute(self: *Session, sql: []const u8) ExecuteResult {

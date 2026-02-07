@@ -3,15 +3,18 @@ const Allocator = std.mem.Allocator;
 
 const Table = @import("../record/table.zig").Table;
 const Schema = @import("../record/tuple.zig").Schema;
+const LockManager = @import("../tx/lock.zig").LockManager;
 
 pub const Catalog = struct {
     tables: std.StringHashMap(*Table),
     allocator: Allocator,
+    lock_mgr: LockManager,
 
     pub fn init(allocator: Allocator) Catalog {
         return .{
             .tables = std.StringHashMap(*Table).init(allocator),
             .allocator = allocator,
+            .lock_mgr = LockManager.init(allocator),
         };
     }
 
@@ -28,6 +31,7 @@ pub const Catalog = struct {
             self.allocator.destroy(table.*);
         }
         self.tables.deinit();
+        self.lock_mgr.deinit();
     }
 
     pub fn createTable(self: *Catalog, name: []const u8, schema: Schema) !void {
@@ -35,7 +39,7 @@ pub const Catalog = struct {
         var owned_columns = try self.allocator.alloc(ColumnDef, schema.columns.len);
         for (schema.columns, 0..) |col, i| {
             owned_columns[i] = ColumnDef{
-                .name = try self.allocator.dupe(u8, col.name), // 이름도 복사!
+                .name = try self.allocator.dupe(u8, col.name),
                 .data_type = col.data_type,
                 .nullable = col.nullable,
             };
@@ -43,7 +47,12 @@ pub const Catalog = struct {
         const owned_schema = Schema{ .columns = owned_columns };
 
         const table_ptr = try self.allocator.create(Table);
-        table_ptr.* = try Table.init(owned_name, owned_schema, self.allocator);
+        table_ptr.* = try Table.init(
+            owned_name,
+            owned_schema,
+            self.allocator,
+            &self.lock_mgr,
+        );
         try self.tables.put(owned_name, table_ptr);
     }
 

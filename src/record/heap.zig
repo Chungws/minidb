@@ -8,6 +8,7 @@ const SlottedPage = slot.SlottedPage;
 const Page = @import("../storage/page.zig").Page;
 const tuple = @import("tuple.zig");
 const Tuple = tuple.Tuple;
+const LockManager = @import("../tx/lock.zig").LockManager;
 
 pub const RID = struct {
     page_id: u16,
@@ -48,13 +49,17 @@ pub const HeapIterator = struct {
 
 pub const HeapFile = struct {
     pages: std.ArrayList(SlottedPage),
+    lock_mgr: *LockManager,
+    current_tx: ?u64,
     allocator: Allocator,
 
-    pub fn init(allocator: Allocator) !HeapFile {
+    pub fn init(allocator: Allocator, lock: *LockManager) !HeapFile {
         var pages = std.ArrayList(SlottedPage).empty;
         try pages.append(allocator, SlottedPage.init(Page.init()));
         return HeapFile{
             .pages = pages,
+            .lock_mgr = lock,
+            .current_tx = null,
             .allocator = allocator,
         };
     }
@@ -67,28 +72,43 @@ pub const HeapFile = struct {
         const data = try t.serialize(self.allocator);
         defer self.allocator.free(data);
 
+        var rid: RID = undefined;
+        var exists = false;
         for (self.pages.items, 0..) |*page, i| {
             const slot_id = page.insert(data) catch |err| switch (err) {
                 error.NotEnoughFreeSpace => continue,
             };
-            return RID{
+            rid = RID{
                 .page_id = @intCast(i),
+                .slot_id = slot_id,
+            };
+            exists = true;
+            break;
+        }
+
+        if (!exists) {
+            try self.pages.append(self.allocator, SlottedPage.init(Page.init()));
+            const page_id = self.pages.items.len - 1;
+            const slot_id = try self.pages.items[page_id].insert(data);
+            rid = RID{
+                .page_id = @intCast(page_id),
                 .slot_id = slot_id,
             };
         }
 
-        try self.pages.append(self.allocator, SlottedPage.init(Page.init()));
-        const page_id = self.pages.items.len - 1;
-        const slot_id = try self.pages.items[page_id].insert(data);
-        return RID{
-            .page_id = @intCast(page_id),
-            .slot_id = slot_id,
-        };
+        if (self.current_tx) |txn_id| {
+            try self.lock_mgr.acquireLock(txn_id, rid, .exclusive);
+        }
+
+        return rid;
     }
 
     pub fn get(self: *const HeapFile, rid: RID) ?[]const u8 {
         if (self.pages.items.len <= rid.page_id) {
             return null;
+        }
+        if (self.current_tx) |txn_id| {
+            self.lock_mgr.acquireLock(txn_id, rid, .shared) catch {};
         }
         return self.pages.items[rid.page_id].get(rid.slot_id);
     }
@@ -103,6 +123,18 @@ pub const HeapFile = struct {
     pub fn scan(self: *const HeapFile) HeapIterator {
         return HeapIterator{ .heap = self };
     }
+
+    pub fn setCurrentTxn(self: *HeapFile, txn_id: u64) void {
+        self.current_tx = txn_id;
+    }
+
+    pub fn getCurrentTxn(self: *const HeapFile) u64 {
+        return self.current_tx;
+    }
+
+    pub fn clearCurrentTxn(self: *HeapFile) void {
+        self.current_tx = null;
+    }
 };
 
 // ============ Tests ============
@@ -110,7 +142,9 @@ const Schema = tuple.Schema;
 
 test "heap file init creates one page" {
     const allocator = std.testing.allocator;
-    var heap = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap = try HeapFile.init(allocator, &lock_mgr);
     defer heap.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), heap.pages.items.len);
@@ -118,7 +152,9 @@ test "heap file init creates one page" {
 
 test "heap file insert and get" {
     const allocator = std.testing.allocator;
-    var heap = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap = try HeapFile.init(allocator, &lock_mgr);
     defer heap.deinit();
 
     const t = Tuple{
@@ -150,7 +186,9 @@ test "heap file insert and get" {
 
 test "heap file delete" {
     const allocator = std.testing.allocator;
-    var heap = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap = try HeapFile.init(allocator, &lock_mgr);
     defer heap.deinit();
 
     const t = Tuple{
@@ -177,7 +215,9 @@ test "heap file delete" {
 
 test "heap file get non-existent returns null" {
     const allocator = std.testing.allocator;
-    var heap = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap = try HeapFile.init(allocator, &lock_mgr);
     defer heap.deinit();
 
     const rid = RID{ .page_id = 99, .slot_id = 0 };
@@ -186,7 +226,9 @@ test "heap file get non-existent returns null" {
 
 test "heap file insert multiple tuples" {
     const allocator = std.testing.allocator;
-    var heap = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap = try HeapFile.init(allocator, &lock_mgr);
     defer heap.deinit();
     const schema = Schema{
         .columns = &[_]ast.ColumnDef{
@@ -231,7 +273,9 @@ test "heap file insert multiple tuples" {
 
 test "heap file creates new page when full" {
     const allocator = std.testing.allocator;
-    var heap = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap = try HeapFile.init(allocator, &lock_mgr);
     defer heap.deinit();
 
     const schema = tuple.Schema{
@@ -264,7 +308,9 @@ test "heap file creates new page when full" {
 
 test "heap file get and deserialize tuple" {
     const allocator = std.testing.allocator;
-    var heap = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap = try HeapFile.init(allocator, &lock_mgr);
     defer heap.deinit();
     const schema = tuple.Schema{
         .columns = &[_]ast.ColumnDef{
@@ -298,7 +344,9 @@ test "heap file get and deserialize tuple" {
 
 test "heap file delete from non-existent page does nothing" {
     const allocator = std.testing.allocator;
-    var heap = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap = try HeapFile.init(allocator, &lock_mgr);
     defer heap.deinit();
 
     // Should not crash
@@ -308,7 +356,9 @@ test "heap file delete from non-existent page does nothing" {
 
 test "heap file RID stability after other deletes" {
     const allocator = std.testing.allocator;
-    var heap = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap = try HeapFile.init(allocator, &lock_mgr);
     defer heap.deinit();
 
     const schema = tuple.Schema{
@@ -345,7 +395,9 @@ test "heap file RID stability after other deletes" {
 
 test "heap iterator scans all tuples" {
     const allocator = std.testing.allocator;
-    var heap = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap = try HeapFile.init(allocator, &lock_mgr);
     defer heap.deinit();
 
     const schema = tuple.Schema{
@@ -382,7 +434,9 @@ test "heap iterator scans all tuples" {
 
 test "heap iterator skips deleted tuples" {
     const allocator = std.testing.allocator;
-    var heap = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap = try HeapFile.init(allocator, &lock_mgr);
     defer heap.deinit();
 
     const schema = tuple.Schema{
@@ -421,7 +475,9 @@ test "heap iterator skips deleted tuples" {
 
 test "heap iterator returns correct RIDs" {
     const allocator = std.testing.allocator;
-    var heap = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap = try HeapFile.init(allocator, &lock_mgr);
     defer heap.deinit();
 
     const schema = tuple.Schema{
@@ -452,7 +508,9 @@ test "heap iterator returns correct RIDs" {
 
 test "heap iterator empty heap returns null" {
     const allocator = std.testing.allocator;
-    var heap = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap = try HeapFile.init(allocator, &lock_mgr);
     defer heap.deinit();
 
     var iter = HeapIterator{ .heap = &heap };
@@ -461,7 +519,9 @@ test "heap iterator empty heap returns null" {
 
 test "insert reuses space in earlier pages after delete" {
     const allocator = std.testing.allocator;
-    var heap = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap = try HeapFile.init(allocator, &lock_mgr);
     defer heap.deinit();
 
     const schema = tuple.Schema{
@@ -489,4 +549,124 @@ test "insert reuses space in earlier pages after delete" {
     const new_rid = try heap.insert(&large_tuple);
     try std.testing.expectEqual(@as(u16, 0), new_rid.page_id);
     try std.testing.expectEqual(@as(usize, 2), heap.pages.items.len); // no new page
+}
+
+// ============ Lock Integration Tests ============
+
+test "heap get acquires shared lock when txn active" {
+    const allocator = std.testing.allocator;
+
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+
+    var heap = try HeapFile.init(allocator, &lock_mgr);
+    defer heap.deinit();
+
+    const schema = tuple.Schema{
+        .columns = &[_]ast.ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+        },
+    };
+    const t = Tuple{
+        .values = &[_]Value{.{ .integer = 1 }},
+        .schema = schema,
+    };
+
+    const rid = try heap.insert(&t);
+
+    // Set active transaction and read
+    heap.setCurrentTxn(1);
+    _ = heap.get(rid);
+
+    // Lock should be held - another exclusive lock should fail
+    const result = lock_mgr.acquireLock(2, rid, .exclusive);
+    try std.testing.expectError(error.LockConflict, result);
+}
+
+test "heap insert acquires exclusive lock when txn active" {
+    const allocator = std.testing.allocator;
+
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+
+    var heap = try HeapFile.init(allocator, &lock_mgr);
+    defer heap.deinit();
+
+    const schema = tuple.Schema{
+        .columns = &[_]ast.ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+        },
+    };
+    const t = Tuple{
+        .values = &[_]Value{.{ .integer = 1 }},
+        .schema = schema,
+    };
+
+    // Set active transaction and insert
+    heap.setCurrentTxn(1);
+    const rid = try heap.insert(&t);
+
+    // Lock should be held - another shared lock should fail
+    const result = lock_mgr.acquireLock(2, rid, .shared);
+    try std.testing.expectError(error.LockConflict, result);
+}
+
+test "heap operations without txn do not acquire locks" {
+    const allocator = std.testing.allocator;
+
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+
+    var heap = try HeapFile.init(allocator, &lock_mgr);
+    defer heap.deinit();
+
+    const schema = tuple.Schema{
+        .columns = &[_]ast.ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+        },
+    };
+    const t = Tuple{
+        .values = &[_]Value{.{ .integer = 1 }},
+        .schema = schema,
+    };
+
+    // No active transaction
+    const rid = try heap.insert(&t);
+    _ = heap.get(rid);
+
+    // No locks held - another txn can acquire exclusive lock
+    try lock_mgr.acquireLock(2, rid, .exclusive);
+}
+
+test "heap clearCurrentTxn stops acquiring locks" {
+    const allocator = std.testing.allocator;
+
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+
+    var heap = try HeapFile.init(allocator, &lock_mgr);
+    defer heap.deinit();
+
+    const schema = tuple.Schema{
+        .columns = &[_]ast.ColumnDef{
+            .{ .name = "id", .data_type = .integer, .nullable = false },
+        },
+    };
+    const t = Tuple{
+        .values = &[_]Value{.{ .integer = 1 }},
+        .schema = schema,
+    };
+
+    heap.setCurrentTxn(1);
+    const rid1 = try heap.insert(&t);
+
+    // Clear transaction
+    heap.clearCurrentTxn();
+
+    // New insert should not acquire lock
+    const rid2 = try heap.insert(&t);
+
+    // rid1 still locked, rid2 not locked
+    try std.testing.expectError(error.LockConflict, lock_mgr.acquireLock(2, rid1, .exclusive));
+    try lock_mgr.acquireLock(2, rid2, .exclusive);
 }

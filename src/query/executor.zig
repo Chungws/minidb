@@ -334,10 +334,14 @@ pub const NestedLoopJoin = struct {
 
 // ============ Tests ============
 
+const LockManager = @import("../tx/lock.zig").LockManager;
+
 test "seq_scan empty table returns null" {
     const allocator = std.testing.allocator;
 
-    var heap_file = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap_file = try HeapFile.init(allocator, &lock_mgr);
     defer heap_file.deinit();
 
     const schema = Schema{
@@ -355,7 +359,9 @@ test "seq_scan empty table returns null" {
 test "seq_scan returns all tuples" {
     const allocator = std.testing.allocator;
 
-    var heap_file = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap_file = try HeapFile.init(allocator, &lock_mgr);
     defer heap_file.deinit();
 
     const schema = Schema{
@@ -403,7 +409,9 @@ test "seq_scan returns all tuples" {
 test "seq_scan reset restarts scan" {
     const allocator = std.testing.allocator;
 
-    var heap_file = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap_file = try HeapFile.init(allocator, &lock_mgr);
     defer heap_file.deinit();
 
     const schema = Schema{
@@ -437,7 +445,9 @@ test "seq_scan reset restarts scan" {
 test "executor with seq_scan" {
     const allocator = std.testing.allocator;
 
-    var heap_file = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap_file = try HeapFile.init(allocator, &lock_mgr);
     defer heap_file.deinit();
 
     const schema = Schema{
@@ -464,7 +474,9 @@ test "executor with seq_scan" {
 test "filter passes matching tuples" {
     const allocator = std.testing.allocator;
 
-    var heap_file = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap_file = try HeapFile.init(allocator, &lock_mgr);
     defer heap_file.deinit();
 
     const schema = Schema{
@@ -518,7 +530,9 @@ test "filter passes matching tuples" {
 test "filter with no matches returns null" {
     const allocator = std.testing.allocator;
 
-    var heap_file = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap_file = try HeapFile.init(allocator, &lock_mgr);
     defer heap_file.deinit();
 
     const schema = Schema{
@@ -552,7 +566,9 @@ test "filter with no matches returns null" {
 test "filter with eq operator" {
     const allocator = std.testing.allocator;
 
-    var heap_file = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap_file = try HeapFile.init(allocator, &lock_mgr);
     defer heap_file.deinit();
 
     const schema = Schema{
@@ -600,7 +616,9 @@ test "filter with eq operator" {
 test "filter with and condition" {
     const allocator = std.testing.allocator;
 
-    var heap_file = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap_file = try HeapFile.init(allocator, &lock_mgr);
     defer heap_file.deinit();
 
     const schema = Schema{
@@ -658,7 +676,9 @@ test "filter with and condition" {
 test "filter with or condition" {
     const allocator = std.testing.allocator;
 
-    var heap_file = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap_file = try HeapFile.init(allocator, &lock_mgr);
     defer heap_file.deinit();
 
     const schema = Schema{
@@ -711,7 +731,9 @@ test "filter with or condition" {
 test "filter with not condition" {
     const allocator = std.testing.allocator;
 
-    var heap_file = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap_file = try HeapFile.init(allocator, &lock_mgr);
     defer heap_file.deinit();
 
     const schema = Schema{
@@ -763,7 +785,9 @@ test "filter with not condition" {
 test "project selects specific columns" {
     const allocator = std.testing.allocator;
 
-    var heap_file = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap_file = try HeapFile.init(allocator, &lock_mgr);
     defer heap_file.deinit();
 
     const schema = Schema{
@@ -816,7 +840,9 @@ test "project selects specific columns" {
 test "project reorders columns" {
     const allocator = std.testing.allocator;
 
-    var heap_file = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap_file = try HeapFile.init(allocator, &lock_mgr);
     defer heap_file.deinit();
 
     const schema = Schema{
@@ -863,7 +889,9 @@ test "project reorders columns" {
 test "project with filter pipeline" {
     const allocator = std.testing.allocator;
 
-    var heap_file = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap_file = try HeapFile.init(allocator, &lock_mgr);
     defer heap_file.deinit();
 
     const schema = Schema{
@@ -929,7 +957,9 @@ test "project with filter pipeline" {
 test "index_scan with eq condition" {
     const allocator = std.testing.allocator;
 
-    var heap_file = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap_file = try HeapFile.init(allocator, &lock_mgr);
     defer heap_file.deinit();
 
     const schema = Schema{
@@ -983,7 +1013,9 @@ test "index_scan with eq condition" {
 test "index_scan with range condition gte" {
     const allocator = std.testing.allocator;
 
-    var heap_file = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap_file = try HeapFile.init(allocator, &lock_mgr);
     defer heap_file.deinit();
 
     const schema = Schema{
@@ -1038,7 +1070,9 @@ test "index_scan with range condition gte" {
 test "index_scan with range condition lte" {
     const allocator = std.testing.allocator;
 
-    var heap_file = try HeapFile.init(allocator);
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+    var heap_file = try HeapFile.init(allocator, &lock_mgr);
     defer heap_file.deinit();
 
     const schema = Schema{
@@ -1102,8 +1136,11 @@ test "index_scan available returns false for neq" {
 test "nested_loop_join basic" {
     const allocator = std.testing.allocator;
 
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+
     // Left table: users (id, name)
-    var left_heap = try HeapFile.init(allocator);
+    var left_heap = try HeapFile.init(allocator, &lock_mgr);
     defer left_heap.deinit();
 
     const left_schema = Schema{
@@ -1134,7 +1171,7 @@ test "nested_loop_join basic" {
                 .{ .name = "item", .data_type = .text, .nullable = false },
             },
         },
-        .heap_file = try HeapFile.init(allocator),
+        .heap_file = try HeapFile.init(allocator, &lock_mgr),
         .indexes = std.StringHashMap(*BTree).init(allocator),
         .allocator = allocator,
     };
@@ -1187,8 +1224,11 @@ test "nested_loop_join basic" {
 test "nested_loop_join no matches" {
     const allocator = std.testing.allocator;
 
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+
     // Left table
-    var left_heap = try HeapFile.init(allocator);
+    var left_heap = try HeapFile.init(allocator, &lock_mgr);
     defer left_heap.deinit();
 
     const left_schema = Schema{
@@ -1211,7 +1251,7 @@ test "nested_loop_join no matches" {
                 .{ .name = "user_id", .data_type = .integer, .nullable = false },
             },
         },
-        .heap_file = try HeapFile.init(allocator),
+        .heap_file = try HeapFile.init(allocator, &lock_mgr),
         .indexes = std.StringHashMap(*BTree).init(allocator),
         .allocator = allocator,
     };
@@ -1242,8 +1282,11 @@ test "nested_loop_join no matches" {
 test "nested_loop_join one to many" {
     const allocator = std.testing.allocator;
 
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+
     // Left table: one user
-    var left_heap = try HeapFile.init(allocator);
+    var left_heap = try HeapFile.init(allocator, &lock_mgr);
     defer left_heap.deinit();
 
     const left_schema = Schema{
@@ -1267,7 +1310,7 @@ test "nested_loop_join one to many" {
                 .{ .name = "user_id", .data_type = .integer, .nullable = false },
             },
         },
-        .heap_file = try HeapFile.init(allocator),
+        .heap_file = try HeapFile.init(allocator, &lock_mgr),
         .indexes = std.StringHashMap(*BTree).init(allocator),
         .allocator = allocator,
     };
@@ -1320,8 +1363,11 @@ test "nested_loop_join one to many" {
 test "nested_loop_join empty left table" {
     const allocator = std.testing.allocator;
 
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+
     // Empty left table
-    var left_heap = try HeapFile.init(allocator);
+    var left_heap = try HeapFile.init(allocator, &lock_mgr);
     defer left_heap.deinit();
 
     const left_schema = Schema{
@@ -1338,7 +1384,7 @@ test "nested_loop_join empty left table" {
                 .{ .name = "user_id", .data_type = .integer, .nullable = false },
             },
         },
-        .heap_file = try HeapFile.init(allocator),
+        .heap_file = try HeapFile.init(allocator, &lock_mgr),
         .indexes = std.StringHashMap(*BTree).init(allocator),
         .allocator = allocator,
     };
@@ -1369,8 +1415,11 @@ test "nested_loop_join empty left table" {
 test "nested_loop_join empty right table" {
     const allocator = std.testing.allocator;
 
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+
     // Left table with data
-    var left_heap = try HeapFile.init(allocator);
+    var left_heap = try HeapFile.init(allocator, &lock_mgr);
     defer left_heap.deinit();
 
     const left_schema = Schema{
@@ -1393,7 +1442,7 @@ test "nested_loop_join empty right table" {
                 .{ .name = "user_id", .data_type = .integer, .nullable = false },
             },
         },
-        .heap_file = try HeapFile.init(allocator),
+        .heap_file = try HeapFile.init(allocator, &lock_mgr),
         .indexes = std.StringHashMap(*BTree).init(allocator),
         .allocator = allocator,
     };
@@ -1418,8 +1467,11 @@ test "nested_loop_join empty right table" {
 test "nested_loop_join with text columns deep copy" {
     const allocator = std.testing.allocator;
 
+    var lock_mgr = LockManager.init(allocator);
+    defer lock_mgr.deinit();
+
     // Left table with text
-    var left_heap = try HeapFile.init(allocator);
+    var left_heap = try HeapFile.init(allocator, &lock_mgr);
     defer left_heap.deinit();
 
     const left_schema = Schema{
@@ -1444,7 +1496,7 @@ test "nested_loop_join with text columns deep copy" {
                 .{ .name = "item", .data_type = .text, .nullable = false },
             },
         },
-        .heap_file = try HeapFile.init(allocator),
+        .heap_file = try HeapFile.init(allocator, &lock_mgr),
         .indexes = std.StringHashMap(*BTree).init(allocator),
         .allocator = allocator,
     };
